@@ -1540,6 +1540,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		YAMLSchemas:              true,
 		WorkloadImages:           true,
 		DeploymentPause:          true,
+		SubstrateHealthMetrics:   true,
 		ResourceIssues:           true,
 		ResourceIssueCoverage:    true,
 		PodEnvironment:           true,
