@@ -454,10 +454,6 @@ export interface RendererOverrides {
     data: any
     onNavigate?: (ref: ResourceRef) => void
   }>
-  // Agent Substrate WorkerPool (exact group ate.dev): host sections rendered
-  // below the generic spec/status view, e.g. Prometheus-backed charts. The
-  // generic view renders either way.
-  SubstrateWorkerPoolSections?: React.ComponentType<{ data: any }>
   // HPA: host wraps the base renderer to add Prometheus-backed replicas /
   // metric charts below the static spec data.
   HPARenderer?: React.ComponentType<{
@@ -847,7 +843,6 @@ export function ResourceRendererDispatch({
   const RayJobComp = rendererOverrides?.RayJobRenderer ?? RayJobRenderer
   const RayClusterComp = rendererOverrides?.RayClusterRenderer ?? RayClusterRenderer
   const CollectorComp = rendererOverrides?.OpenTelemetryCollectorRenderer ?? OpenTelemetryCollectorRenderer
-  const WorkerPoolSections = rendererOverrides?.SubstrateWorkerPoolSections
   const RayServiceComp = rendererOverrides?.RayServiceRenderer ?? RayServiceRenderer
   const KueueWorkloadComp = rendererOverrides?.KueueWorkloadRenderer ?? KueueWorkloadRenderer
   const LocalQueueComp = rendererOverrides?.LocalQueueRenderer ?? LocalQueueRenderer
@@ -1151,7 +1146,6 @@ export function ResourceRendererDispatch({
             matched (e.g. a Knative Configuration sharing the `configurations`
             plural with Crossplane Configuration). */}
         {(!isKnownKind || crossplaneCollisionFallthrough || kyvernoCollisionFallthrough || veleroCollisionFallthrough || groupGatedFallthrough || calicoCollisionFallthrough || nonCoreJobFallthrough) && <GenericRenderer data={data} />}
-        {kind === 'workerpools' && isSubstrateResource(data) && WorkerPoolSections && <WorkerPoolSections data={data} />}
 
         {/* Common sections - can be disabled when parent handles them separately */}
         {showCommonSections && (
