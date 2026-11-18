@@ -31,6 +31,9 @@ type WorkloadRolloutActivity struct {
 	Updated   int32        `json:"updated"`
 	Ready     int32        `json:"ready"`
 	Available int32        `json:"available"`
+	// Gate names the pause a Rollout waits for promotion at
+	// (ArgoPromotionGate); empty for every other state.
+	Gate string `json:"gate,omitempty"`
 }
 
 func WorkloadRollout(obj any) WorkloadRolloutActivity {
@@ -207,6 +210,13 @@ func argoRollout(r *unstructured.Unstructured) WorkloadRolloutActivity {
 		}
 		return base.with(RolloutStalled, false, "Rollout stalled", message)
 	case "paused":
+		if label := argoAwaitedAction(r); label != "" {
+			awaited := base.withAction(RolloutPaused, true, label, argoStepDetail(r, updated, desired, available))
+			if label == promotionGateLabel {
+				awaited.Gate = ArgoPromotionGate(r)
+			}
+			return awaited
+		}
 		return base.with(RolloutPaused, true, "Rollout paused", argoStepDetail(r, updated, desired, available))
 	case "progressing":
 		if updated == 0 {
@@ -221,6 +231,99 @@ func argoRollout(r *unstructured.Unstructured) WorkloadRolloutActivity {
 		}
 		return base.with(RolloutIdle, false, "Stable", message)
 	}
+}
+
+// argoAwaitedAction names what a paused Rollout is waiting on someone for, or
+// "" when it is waiting on no one:
+//   - an analysis run or an experiment that came back inconclusive: promote
+//     past it or abort;
+//   - a canary pause step with no duration, or a blue-green cut-over with
+//     auto-promotion off (the controller then ignores autoPromotionSeconds):
+//     promote.
+//
+// Only a pause the controller recorded counts (status.pauseConditions).
+// Right after a promote the stored phase still says Paused while the pause
+// conditions are already gone (controllerPause stays true until the controller
+// moves on): that Rollout is about to advance and must not ask for a promote
+// again. A pause a person set (spec.paused) is left to that person: it lifts
+// the same way it was set, and the Rollout is not waiting on anyone else.
+//
+// Mirrored by argoAwaitedAction in packages/k8s-ui/src/utils/
+// workload-rollout.ts; both are checked against workload_rollout_vectors.json.
+func argoAwaitedAction(r *unstructured.Unstructured) string {
+	if paused, _, _ := unstructured.NestedBool(r.Object, "spec", "paused"); paused {
+		return ""
+	}
+	reasons := map[string]bool{}
+	pauses, _, _ := unstructured.NestedSlice(r.Object, "status", "pauseConditions")
+	for _, raw := range pauses {
+		if pause, ok := raw.(map[string]any); ok {
+			if reason, _ := pause["reason"].(string); reason != "" {
+				reasons[reason] = true
+			}
+		}
+	}
+	switch {
+	case reasons["InconclusiveAnalysisRun"]:
+		return "Analysis inconclusive"
+	case reasons["InconclusiveExperiment"]:
+		return "Experiment inconclusive"
+	}
+	if _, blueGreen, _ := unstructured.NestedMap(r.Object, "spec", "strategy", "blueGreen"); blueGreen {
+		auto, set, _ := unstructured.NestedBool(r.Object, "spec", "strategy", "blueGreen", "autoPromotionEnabled")
+		if reasons["BlueGreenPause"] && set && !auto {
+			return promotionGateLabel
+		}
+		return ""
+	}
+	if !reasons["CanaryPauseStep"] {
+		return ""
+	}
+	steps, _, _ := unstructured.NestedSlice(r.Object, "spec", "strategy", "canary", "steps")
+	index, found, _ := unstructured.NestedInt64(r.Object, "status", "currentStepIndex")
+	if !found || index < 0 || index >= int64(len(steps)) {
+		return ""
+	}
+	step, _ := steps[index].(map[string]any)
+	pause, isPause := step["pause"]
+	if !isPause {
+		return ""
+	}
+	// Argo Rollouts reads a missing or empty duration as "until promoted";
+	// any other value, 0 included, ends the pause by itself.
+	if timed, ok := pause.(map[string]any); ok {
+		if duration, ok := timed["duration"]; ok && duration != nil && duration != "" {
+			return ""
+		}
+	}
+	return promotionGateLabel
+}
+
+const promotionGateLabel = "Waiting for promotion"
+
+// ArgoPromotionGate names the pause a Rollout waits for promotion at: where it
+// stands (the canary step, or the blue-green revision) and when the controller
+// recorded the pause. A promote confirmed for one pause must not clear another:
+// with two untimed pauses in a row, someone else's promote moves the Rollout to
+// the next one, which still reads "Waiting for promotion".
+//
+// Mirrored by argoPromotionGate in packages/k8s-ui/src/utils/workload-rollout.ts.
+func ArgoPromotionGate(r *unstructured.Unstructured) string {
+	started := ""
+	pauses, _, _ := unstructured.NestedSlice(r.Object, "status", "pauseConditions")
+	for _, raw := range pauses {
+		if pause, ok := raw.(map[string]any); ok {
+			if at, _ := pause["startTime"].(string); at > started {
+				started = at
+			}
+		}
+	}
+	if _, blueGreen, _ := unstructured.NestedMap(r.Object, "spec", "strategy", "blueGreen"); blueGreen {
+		hash, _, _ := unstructured.NestedString(r.Object, "status", "currentPodHash")
+		return "pod:" + hash + "@" + started
+	}
+	index, _, _ := unstructured.NestedInt64(r.Object, "status", "currentStepIndex")
+	return fmt.Sprintf("step:%d@%s", index, started)
 }
 
 func argoFailureMessage(r *unstructured.Unstructured) (string, bool) {
@@ -495,6 +598,7 @@ func (a WorkloadRolloutActivity) with(phase RolloutPhase, active bool, label, de
 	a.Manual = false
 	a.Label = label
 	a.Detail = detail
+	a.Gate = ""
 	return a
 }
 

@@ -25,7 +25,10 @@ import { clsx } from "clsx";
 import type { ResourceRef, Topology, TopologyNode } from "../../types";
 import argoCdLogo from "../../assets/gitops/argocd.png";
 import fluxLogo from "../../assets/gitops/flux.svg";
-import { StatusDot, mapHealthToTone } from "../ui/status-tone";
+import { StatusDot, StatusDotOrSpinner, mapHealthToTone } from "../ui/status-tone";
+import { rolloutIsMoving } from "../../utils/workload-rollout";
+import { SourceActivity } from "./SourceActivity";
+import { sourceInFlight } from "../../utils/applications";
 import { Tooltip } from "../ui/Tooltip";
 import { useAnimatedUnmount } from "../../hooks/useAnimatedUnmount";
 import {
@@ -76,6 +79,8 @@ import {
   batchActivityForApp,
   batchRuntimeForApp,
   rolloutSummaryForApps,
+  rolloutSummaryAwaitsAction,
+  workloadAwaitsAction,
   rolloutDisplayHealth,
   applicationDisplayHealth,
   sourceReportedHealth,
@@ -259,6 +264,10 @@ export type ApplicationDetailProps = {
   onHistoryRangeChange?: (range: ApplicationHistoryRange) => void;
   onOpenTimeline?: (timestamp?: string) => void;
   onOpenSource?: (source: AppSourceRef) => void;
+  // The host's controls for the app's GitOps source (Reconcile, Suspend,
+  // Resume…): the host owns the API calls. Nothing for a native Helm release
+  // or an app with no source.
+  renderSourceActions?: (app: AppRow) => ReactNode;
 } & SelectionProps &
   ViewProps;
 
@@ -353,6 +362,7 @@ export function ApplicationDetail({
   onHistoryRangeChange,
   onOpenTimeline,
   onOpenSource,
+  renderSourceActions,
   selectedWorkloadKey,
   onSelectWorkload,
   selectedView,
@@ -629,6 +639,7 @@ export function ApplicationDetail({
           )}
         </div>
         <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
+          {renderSourceActions?.(app)}
           <span
             className={`inline-flex items-center gap-2 rounded-md px-2.5 py-1 ring-1 ring-inset ${verdictTone}`}
           >
@@ -734,12 +745,20 @@ export function ApplicationDetail({
           <ContextFact label="Runtime">
             <Tooltip content={<RolloutSummaryTooltip summary={rolloutSummary} />} delay={150}>
               <span className="inline-flex items-center gap-1.5">
-                <StatusDot tone={mapHealthToTone(rolloutSummary.health)} />
+                <StatusDotOrSpinner tone={mapHealthToTone(rolloutSummary.health)} moving={rolloutSummary.moving} awaiting={rolloutSummaryAwaitsAction(rolloutSummary)} label="Rollout in progress" />
                 {rolloutSummary.label}
               </span>
             </Tooltip>
           </ContextFact>
         ) : null}
+        {/* Shown while the source is doing something, or paused: then it is
+            the news on every tab, the workload view included. Settled, the
+            overview's Delivery fact and source panel already say it. */}
+        {app.sourceRef?.type === "gitops" && (sourceInFlight(app.sourceStatus) || app.sourceStatus?.suspended) && (
+          <ContextFact label="Delivery">
+            <SourceActivity source={app.sourceRef} status={app.sourceStatus} />
+          </ContextFact>
+        )}
         {(app.appVersion || versions.length > 0) && (
           <ContextFact label="Version">
             <VersionInfo app={app} variant="fact" />
@@ -1161,9 +1180,14 @@ function ApplicationOverview({
                 pureBatch
                   ? batchRuntimeForApp(app).label
                   : rolloutSummary
-                    ? runtimeHealth === 'healthy' || runtimeHealth === 'neutral'
-                      ? rolloutSummary.label
-                      : `${HEALTH_META[runtimeHealth].label} · ${rolloutSummary.label}`
+                    ? (
+                      <span className="inline-flex items-center gap-1.5">
+                        <StatusDotOrSpinner tone={mapHealthToTone(rolloutSummary.health)} moving={rolloutSummary.moving} awaiting={rolloutSummaryAwaitsAction(rolloutSummary)} size="md" label="Rollout in progress" />
+                        {runtimeHealth === 'healthy' || runtimeHealth === 'neutral'
+                          ? rolloutSummary.label
+                          : `${HEALTH_META[runtimeHealth].label} · ${rolloutSummary.label}`}
+                      </span>
+                    )
                     : HEALTH_META[runtimeHealth].label
               }
               detail={
@@ -2041,7 +2065,7 @@ function WorkloadsMatrix({
                 </td>
                 <td className="px-2 py-2">
                   <span className="inline-flex items-center gap-1.5 text-theme-text-secondary">
-                    <StatusDot tone={mapHealthToTone(status.health)} />
+                    <StatusDotOrSpinner tone={mapHealthToTone(status.health)} moving={rolloutIsMoving(w.rollout)} awaiting={workloadAwaitsAction(w) && status.health !== 'unhealthy'} label="Rollout in progress" />
                     {status.label}
                   </span>
                 </td>

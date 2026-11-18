@@ -21,7 +21,7 @@ import {
 import '@xyflow/react/dist/style.css'
 import { toCanvas } from 'html-to-image'
 
-import { AlertTriangle, ChevronsDownUp, ChevronsUpDown, Download, Info, Layers, LayoutGrid, Loader2, Maximize, Minus, Pause, Play, Plus, RotateCw, Shield } from 'lucide-react'
+import { AlertTriangle, ChevronsDownUp, ChevronsUpDown, Download, Hand, Info, Layers, LayoutGrid, Loader2, Maximize, Minus, Pause, Play, Plus, RotateCw, Shield } from 'lucide-react'
 import { PaneLoader } from '../ui/PaneLoader'
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import { TopologyOverlayBar } from './TopologyOverlayBar'
@@ -31,6 +31,7 @@ import { useToast } from '../ui/Toast'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 
 import { K8sResourceNode } from './K8sResourceNode'
+import { changingSources, nextChangeDeadline, topologyChangeKey, topologyNodeAwaiting, topologyNodeChanging } from './topology-motion'
 import { GroupNode } from './GroupNode'
 import { splitInternetByGroup } from './internet-groups'
 import { NEUTRAL_OWNER, type WorkloadFocus } from '../../utils/workload-colors'
@@ -58,6 +59,14 @@ function getEdgeColor(type: string, isTrafficView: boolean): string {
   }
   return EDGE_COLORS[type as keyof typeof EDGE_COLORS] || '#64748b'
 }
+
+// A change in flight (a rollout running down the chain it manages) marches in
+// its own cyan: animated dashes here otherwise mean traffic (green/blue), and
+// a rollout must not read as traffic.
+const CHANGE_EDGE_COLOR = '#06b6d4'
+// The dash pattern is 10 long, the distance React Flow's animation travels per
+// cycle, so the march loops without a jump.
+const CHANGE_EDGE_STYLE: React.CSSProperties = { stroke: CHANGE_EDGE_COLOR, strokeWidth: 2.5, strokeDasharray: '6 4' }
 
 // Human-readable edge legend for the resources view (traffic view is all-green).
 const EDGE_LEGEND: { label: string; color: string }[] = [
@@ -130,7 +139,7 @@ const EDGE_ANIMATION_THRESHOLD = 200
 const LARGE_CLUSTER_NS_THRESHOLD = 5
 
 // Build edges, handling collapsed groups
-function buildEdges(
+export function buildEdges(
   topologyEdges: TopologyEdge[],
   collapsedGroups: Set<string>,
   groupMap: Map<string, string[]>,
@@ -164,6 +173,7 @@ function buildEdges(
   // preview node - the "active DAG" should read as a continuous path from the
   // Service all the way down to the pods actually serving that role, not stop
   // at the Rollout.
+  const changing = nodes ? changingSources(nodes, topologyEdges) : new Set<string>()
   const nodeTrafficRoleById = new Map<string, string>()
   if (nodes) {
     for (const n of nodes) {
@@ -222,13 +232,19 @@ function buildEdges(
     const animated = enableAnimations && !reach && !edge.partial && (
       (isTrafficView && isTrafficEdge) || isRolloutTrafficEdge
     )
+    // A change edge is cyan and dashed on a graph of any size; on one too
+    // large to animate it holds still, the way the GitOps tree's edges do
+    // past its motion budget.
+    const isChangeEdge = !isTrafficView && !reach && !edge.partial && !isRolloutTrafficEdge &&
+      edge.type === 'manages' && changing.has(edge.source)
 
     edges.push({
       id: edgeId,
       source,
       target,
       type: 'smoothstep',
-      animated,
+      animated: animated || (isChangeEdge && enableAnimations),
+      data: isChangeEdge ? { change: true } : undefined,
       // labelTitle (declared route when the label shows an overridden tested
       // path) renders as a native SVG <title> tooltip inside React Flow's edge
       // text - keeps the declared path available without overwriting the label.
@@ -237,11 +253,11 @@ function buildEdges(
         : (edge.label || undefined),
       markerEnd: {
         type: MarkerType.ArrowClosed,
-        color: edgeColor,
+        color: isChangeEdge ? CHANGE_EDGE_COLOR : edgeColor,
         width: 12,
         height: 12,
       },
-      style: reach ? reachEdgeStyle(reach) : getEdgeStyle(edge.type, isTrafficView, isTrafficEdge, animated, edge.partial === true, isRolloutTrafficEdge),
+      style: reach ? reachEdgeStyle(reach) : isChangeEdge ? CHANGE_EDGE_STYLE : getEdgeStyle(edge.type, isTrafficView, isTrafficEdge, animated, edge.partial === true, isRolloutTrafficEdge),
     })
   }
 
@@ -455,6 +471,22 @@ export function TopologyGraph({
   const [fitViewCounter, setFitViewCounter] = useState(0)
   const [isExporting, setIsExporting] = useState(false)
   const [showLegend, setShowLegend] = useState(false)
+  // Work in flight on the graph: counted for the overlay, and the legend
+  // explains the cyan edges only while there are some.
+  // A controller's "still working" lapses on its own (inProgressUntil); the
+  // graph is rebuilt only when the cluster changes, so it looks again at the
+  // next lapse by itself.
+  const [deadlineTick, setDeadlineTick] = useState(0)
+  const nextDeadline = useMemo(() => nextChangeDeadline(topology?.nodes ?? [], Date.now()), [topology, deadlineTick])
+  useEffect(() => {
+    if (nextDeadline === undefined) return
+    const id = window.setTimeout(() => setDeadlineTick((t) => t + 1), Math.max(0, nextDeadline - Date.now()) + 50)
+    return () => window.clearTimeout(id)
+  }, [nextDeadline])
+  const changingCount = useMemo(() => (topology?.nodes ?? []).filter((node) => topologyNodeChanging(node.data as Record<string, unknown> | undefined)).length, [topology, deadlineTick])
+  // Parked until a person acts: rollouts waiting to be promoted.
+  const awaitingCount = useMemo(() => (topology?.nodes ?? []).filter((node) => topologyNodeAwaiting(node.data as Record<string, unknown> | undefined) !== undefined).length, [topology, deadlineTick])
+  const hasChangeEdges = edges.some((edge) => (edge.data as { change?: boolean } | undefined)?.change === true)
   const [warningsOpen, setWarningsOpen] = useState(false)
   const warningsDisclosure = useDisclosure(warningsOpen)
   const prevStructureRef = useRef<string>('')
@@ -465,6 +497,13 @@ export function TopologyGraph({
   const prevRetryCountRef = useRef(0)
   // Stores the current groupMap so collapse-all can reference group IDs without a stale closure
   const groupMapRef = useRef<Map<string, string[]>>(new Map())
+  const nodeToGroupRef = useRef<Map<string, string> | undefined>(undefined)
+  // What the last layout built its edges with, for redrawing them in place.
+  const edgeBuildRef = useRef<{ nodeCount: number; smartDefaultActive: boolean } | null>(null)
+  const [edgesEpoch, setEdgesEpoch] = useState(0)
+  // Bumped each time a layout lands its nodes, edges or not (a graph of
+  // collapsed groups draws no edges).
+  const [nodesEpoch, setNodesEpoch] = useState(0)
   // Tracks whether the one-time smart default (collapse all for large clusters) has fired
   const hasAppliedSmartDefaultRef = useRef(false)
   // After layout completes for a single-group change, stores the group ID so
@@ -705,6 +744,7 @@ export function TopologyGraph({
       smartDefaultActive
     )
     groupMapRef.current = groupMap
+    nodeToGroupRef.current = nodeToGroup
 
     // Apply layout and get positioned nodes
     const layoutStartMs = performance.now()
@@ -785,6 +825,7 @@ export function TopologyGraph({
       })
 
       setNodes(nodesWithHandlers)
+      setNodesEpoch(e => e + 1)
 
       // Hide edges when all groups are collapsed — inter-namespace edges are noise in the overview.
       // Always show edges in single-namespace view (hideGroupHeader) since there's no group container.
@@ -807,6 +848,8 @@ export function TopologyGraph({
           workingNodes
         )
         setEdges(builtEdges)
+        edgeBuildRef.current = { nodeCount: nodesWithHandlers.length, smartDefaultActive }
+        setEdgesEpoch(e => e + 1)
       }
       if (groupingMode === 'none') setLayoutEpoch(e => e + 1)
     }).catch((err) => {
@@ -864,6 +907,65 @@ export function TopologyGraph({
     // a stale layout closure can't leave the canvas painted with pre-probe styles.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visualKey, layoutEpoch])
+
+  // What each group holds that is at work or waiting on a person, for its
+  // header (GroupNode): a collapsed namespace has to say so, or the counts
+  // under the graph point nowhere. It changes with the data, not the
+  // structure, so it is written onto the group nodes in place. groupMapRef is
+  // refreshed by each layout, which bumps nodesEpoch once its nodes land.
+  const groupActivity = useMemo(() => {
+    const counts = new Map<string, { changing: number; awaiting: number }>()
+    if (groupingMode === 'none') return counts
+    const byId = new Map(workingNodes.map((node) => [node.id, node]))
+    for (const [groupKey, memberIds] of groupMapRef.current) {
+      let changing = 0
+      let awaiting = 0
+      for (const id of memberIds) {
+        const data = byId.get(id)?.data as Record<string, unknown> | undefined
+        if (topologyNodeChanging(data)) changing++
+        else if (topologyNodeAwaiting(data)) awaiting++
+      }
+      if (changing > 0 || awaiting > 0) counts.set(groupKey, { changing, awaiting })
+    }
+    return counts
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workingNodes, groupingMode, deadlineTick, nodesEpoch])
+  useEffect(() => {
+    if (groupingMode === 'none') return
+    setNodes((prev) => {
+      let changed = false
+      const next = prev.map((node) => {
+        if (node.type !== 'group') return node
+        const counts = groupActivity.get(node.data?.name as string)
+        const changing = counts?.changing ?? 0
+        const awaiting = counts?.awaiting ?? 0
+        if ((node.data?.changingCount ?? 0) === changing && (node.data?.awaitingCount ?? 0) === awaiting) return node
+        changed = true
+        return { ...node, data: { ...node.data, changingCount: changing, awaitingCount: awaiting } }
+      })
+      return changed ? next : prev
+    })
+  }, [groupActivity, groupingMode, setNodes])
+
+  // Change in flight is data, not structure: a rollout or a reconcile starts
+  // and ends without a node or an edge being added or removed, so the layout
+  // effect never sees it, and an edge would keep marching after the work is
+  // done (or never start). Redraw the edges in place when the set of changing
+  // nodes flips, and again once a layout lands: its edges were built from the
+  // nodes it started with.
+  const changeKey = useMemo(() => (isTrafficView ? '' : topologyChangeKey(workingNodes)), [workingNodes, isTrafficView, deadlineTick])
+  useEffect(() => {
+    const built = edgeBuildRef.current
+    if (!built || prevStructureRef.current === '') return
+    setEdges(prev => {
+      if (prev.length === 0) return prev
+      if (changeKey === '' && !prev.some(edge => (edge.data as { change?: boolean } | undefined)?.change)) return prev
+      return buildEdges(workingEdges, collapsedGroups, groupMapRef.current ?? new Map(), groupingMode, isTrafficView, nodeToGroupRef.current, built.nodeCount, groupLevels, built.smartDefaultActive, workingNodes)
+    })
+    // workingNodes and workingEdges are read at the moment the key flips;
+    // structure changes go through the layout effect, which bumps edgesEpoch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [changeKey, edgesEpoch])
 
   // Handle node click
   const handleNodeClick = useCallback(
@@ -1205,6 +1307,18 @@ export function TopologyGraph({
           </div>
           {!isTrafficView && (
             <>
+              {changingCount > 0 && (
+                <div className="flex items-center gap-1.5 rounded-md border border-theme-border bg-theme-surface/95 px-2.5 py-1.5 text-[11px] font-medium text-sky-700 shadow-theme-md backdrop-blur dark:text-sky-400">
+                  <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+                  {changingCount} in progress
+                </div>
+              )}
+              {awaitingCount > 0 && (
+                <div className="flex items-center gap-1.5 rounded-md border border-theme-border bg-theme-surface/95 px-2.5 py-1.5 text-[11px] font-medium text-amber-700 shadow-theme-md backdrop-blur dark:text-amber-400">
+                  <Hand className="h-3 w-3" aria-hidden />
+                  {awaitingCount} waiting for action
+                </div>
+              )}
               {showLegend && (
                 <div className="rounded-md border border-theme-border bg-theme-surface/95 px-3 py-2 shadow-theme-md backdrop-blur">
                   <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">Edge colors</div>
@@ -1215,6 +1329,12 @@ export function TopologyGraph({
                         {e.label}
                       </div>
                     ))}
+                    {hasChangeEdges && (
+                      <div className="flex items-center gap-2 text-[11px] text-theme-text-secondary">
+                        <span className="inline-block w-5 border-t-2 border-dashed" style={{ borderColor: CHANGE_EDGE_COLOR }} />
+                        change in progress
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

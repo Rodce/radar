@@ -16,6 +16,7 @@ interface GoldenVector {
   updated: number
   ready: number
   available: number
+  gate?: string
   object: any
 }
 
@@ -41,6 +42,7 @@ describe('workload rollout golden vectors', () => {
         updated: vector.updated,
         ready: vector.ready,
         available: vector.available,
+        gate: vector.gate,
       })
     })
   }

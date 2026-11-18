@@ -1,6 +1,8 @@
 package topology
 
 import (
+	"time"
+
 	"fmt"
 	"log"
 	"strings"
@@ -286,6 +288,7 @@ func (b *Builder) addCrossplaneNodes(nodes []Node, edges []Edge, opts BuildOptio
 				data[clusterScopedResourceKey] = gvr.Resource
 				data[clusterScopedGroupKey] = gvr.Group
 			}
+			AnnotateResourceProgress(data, r, time.Now())
 			nodes = append(nodes, Node{
 				ID:     nodeID,
 				Kind:   NodeKind(kind),

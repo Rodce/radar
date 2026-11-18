@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState } from 'react'
+import { createContext, memo, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   Background,
   BackgroundVariant,
@@ -15,20 +15,37 @@ import {
   type NodeTypes,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { AlertTriangle, ChevronRight, Maximize, Search, X } from 'lucide-react'
+import { AlertTriangle, ChevronRight, Clock3, Hand, Loader2, Maximize, Pause, Search, X } from 'lucide-react'
 import { PaneLoader } from '../../ui/PaneLoader'
 import { Input } from '../../ui/Input'
 import { clsx } from 'clsx'
 
 import type { GitOpsIssue, GitOpsResourceTree, GitOpsTreeNode, GitOpsTreeRef, HealthStatus } from '../../../types'
 import { displayKind } from '../../../types'
-import { healthToSeverity, SEVERITY_DOT } from '../../../utils/badge-colors'
-import { formatCompactAge } from '../../../utils/format'
+import { healthToSeverity, SEVERITY_DOT, SEVERITY_TEXT } from '../../../utils/badge-colors'
+import { formatCompactAge, formatElapsed } from '../../../utils/format'
+import { awaitingNote, rolloutStall, type AwaitingAction } from '../../../utils/awaiting-action'
 import { radarHealthNote } from '../health-provenance'
+import { useNow } from '../../../hooks/useNow'
 import { servicePortsTooltip, type ServicePortEntry } from '../../topology/K8sResourceNode'
 import { getTopologyIcon } from '../../../utils/resource-icons'
 import { Tooltip } from '../../ui/Tooltip'
-import { hasGitOpsTreeFilters, matchesGitOpsTreeFilters, treeNodeHealth, type GitOpsTreeFilters } from './tree-helpers'
+import {
+  flowingSources,
+  hasGitOpsTreeFilters,
+  inFlightNote,
+  inFlightSince,
+  inFlightTimeoutMs,
+  isNodeTerminating,
+  matchesGitOpsTreeFilters,
+  nodeAwaiting,
+  nodeInFlight,
+  nodeRolloutHold,
+  treeMotion,
+  treeNodeHealth,
+  type GitOpsTreeFilters,
+} from './tree-helpers'
+export { flowingSources, inFlightNodeIDs, nodeInFlight } from './tree-helpers'
 import { rankTree, renderedEdge, shortcutEdges, upstreamClosure, upstreamEdges } from './layout'
 
 export type GitOpsTreePreset = 'full' | 'compact' | 'workloads' | 'app'
@@ -71,7 +88,15 @@ interface GitOpsTreeGraphProps {
   // loaded alongside the tree — no extra request). Matched onto tree nodes
   // by ref so an unhealthy node's hover reveals WHY, not just THAT.
   issues?: GitOpsIssue[]
+  // What the host can do for a node that waits on a person (nodeAwaiting): a
+  // Promote button for an Argo Rollout. Rendered on the card, beside the words
+  // that say what is being waited for. Without it the card only says so.
+  renderAwaitingAction?: (node: GitOpsTreeNode, awaiting: AwaitingAction) => ReactNode
 }
+
+// React Flow builds the cards itself, so the host's renderer reaches them
+// through context instead of through each node's data.
+const AwaitingActionContext = createContext<GitOpsTreeGraphProps['renderAwaitingAction']>(undefined)
 
 // refKey builds a stable lookup key from either a tree ref or an insight
 // ref. Namespace is omitted for cluster-scoped resources on both sides, so
@@ -105,6 +130,7 @@ function GitOpsTreeGraphInner({
   filters,
   showToolbar = true,
   issues,
+  renderAwaitingAction,
 }: GitOpsTreeGraphProps) {
   const [internalPreset, setInternalPreset] = useState<GitOpsTreePreset>('compact')
   const [internalQuery, setInternalQuery] = useState('')
@@ -125,7 +151,7 @@ function GitOpsTreeGraphInner({
     if (preset !== 'compact') setExpandedGroups(new Set())
   }, [preset])
   const causeByRef = useMemo(() => buildCauseByRef(issues), [issues])
-  const { nodes, edges } = useMemo(() => buildFlowGraph(tree, preset, query, filters, expandedGroups, causeByRef), [tree, preset, query, filters, expandedGroups, causeByRef])
+  const { nodes, edges, calm } = useMemo(() => buildFlowGraph(tree, preset, query, filters, expandedGroups, causeByRef), [tree, preset, query, filters, expandedGroups, causeByRef])
 
   useEffect(() => {
     if (nodes.length === 0) return
@@ -182,6 +208,7 @@ function GitOpsTreeGraphInner({
           onFit={() => reactFlow.fitView({ padding: 0.18, maxZoom: 1.15, duration: 180 })}
         />
       )}
+      <AwaitingActionContext.Provider value={renderAwaitingAction}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -208,7 +235,8 @@ function GitOpsTreeGraphInner({
           showInteractive={false}
         />
       </ReactFlow>
-      <EdgeLegend edges={edges} />
+      </AwaitingActionContext.Provider>
+      <EdgeLegend edges={edges} calm={calm} />
     </div>
   )
 }
@@ -217,11 +245,14 @@ function GitOpsTreeGraphInner({
 // renders rows for edge types actually present in the current view —
 // hides the legend entirely when the graph has only `owns` edges (the
 // default for Argo apps without dependencies).
-function EdgeLegend({ edges }: { edges: Edge[] }) {
+function EdgeLegend({ edges, calm }: { edges: Edge[]; calm: boolean }) {
   const types = new Set(edges.map((e) => e.data?.type as string).filter(Boolean))
-  const rows: Array<{ key: string; color: string; label: string }> = []
+  const rows: Array<{ key: string; color: string; label: string; dashed?: boolean }> = []
   if (types.has('source')) rows.push({ key: 'source', color: getEdgeColor('source'), label: 'Source artifact' })
   if (types.has('dependsOn')) rows.push({ key: 'dependsOn', color: getEdgeColor('dependsOn'), label: 'Depends on' })
+  // Past the motion budget the dashes hold still; the legend says why, so a
+  // still tree is not read as an idle one.
+  if (edges.some((e) => e.data?.flowing)) rows.push({ key: 'flowing', color: getEdgeColor('owns'), label: calm ? 'Change in progress (many at once: motion reduced)' : 'Change in progress', dashed: true })
   // Always show the default ownership color when there are 2+ edge kinds —
   // operators need to compare against it. Hide when "owns" is the only kind.
   if (rows.length > 0) rows.unshift({ key: 'owns', color: getEdgeColor('owns'), label: 'Ownership' })
@@ -232,7 +263,9 @@ function EdgeLegend({ edges }: { edges: Edge[] }) {
       <div className="flex flex-col gap-1">
         {rows.map((row) => (
           <div key={row.key} className="flex items-center gap-2 text-theme-text-secondary">
-            <span className="inline-block h-[2px] w-5 rounded" style={{ backgroundColor: row.color }} />
+            {row.dashed
+              ? <span className="inline-block w-5 border-t-2 border-dashed" style={{ borderColor: row.color }} />
+              : <span className="inline-block h-[2px] w-5 rounded" style={{ backgroundColor: row.color }} />}
             {row.label}
           </div>
         ))}
@@ -318,8 +351,8 @@ function getEdgeColor(type: string): string {
   }
 }
 
-function buildFlowGraph(tree: GitOpsResourceTree | null, preset: GitOpsTreePreset, query: string, filters?: GitOpsTreeFilters, expandedGroups?: Set<string>, causeByRef?: Map<string, NodeCause>): { nodes: Node[]; edges: Edge[] } {
-  if (!tree) return { nodes: [], edges: [] }
+export function buildFlowGraph(tree: GitOpsResourceTree | null, preset: GitOpsTreePreset, query: string, filters?: GitOpsTreeFilters, expandedGroups?: Set<string>, causeByRef?: Map<string, NodeCause>): { nodes: Node[]; edges: Edge[]; calm: boolean } {
+  if (!tree) return { nodes: [], edges: [], calm: false }
   const visibleTree = applyGraphFilters(applyPreset(tree, preset, expandedGroups), filters)
   const byID = new Map(visibleTree.nodes.map(node => [node.id, node]))
   const ranks = groupRanks(rankTree(visibleTree), byID)
@@ -327,6 +360,14 @@ function buildFlowGraph(tree: GitOpsResourceTree | null, preset: GitOpsTreePrese
   const upstreamTargets = new Set(upstreamEdges(visibleTree).map(edge => edge.target))
   const shortcuts = shortcutEdges(visibleTree)
   const normalizedQuery = query.trim().toLowerCase()
+  const flowing = flowingSources(visibleTree.nodes, visibleTree.edges)
+  const shownEdges = visibleTree.edges.filter(edge => positioned.has(edge.source) && positioned.has(edge.target) && !shortcuts.has(edge))
+  // Edges out of a node with work in flight march toward what it is applying
+  // or rolling: the change's direction at a glance. Upstream edges (sources,
+  // dependsOn) stay still: nothing flows back up them.
+  const marches = (edge: GitOpsResourceTree['edges'][number]) => flowing.has(edge.source) && !upstreamTargets.has(edge.target)
+  const inFlightCards = Array.from(positioned.keys()).filter(id => nodeInFlight(byID.get(id)!)).length
+  const calm = treeMotion(inFlightCards, shownEdges.filter(marches).length, positioned.size) === 'calm'
   const nodes = Array.from(positioned.entries()).map(([id, position]) => {
     const node = byID.get(id)!
     return {
@@ -337,33 +378,43 @@ function buildFlowGraph(tree: GitOpsResourceTree | null, preset: GitOpsTreePrese
         node,
         highlighted: normalizedQuery !== '' && matchesQuery(node, normalizedQuery),
         cause: causeByRef?.get(refKey(node.ref)),
+        calm,
       },
     }
   })
 
-  const edges = visibleTree.edges
-    .filter(edge => positioned.has(edge.source) && positioned.has(edge.target) && !shortcuts.has(edge))
-    .map(edge => ({
-      id: `${edge.source}->${edge.target}`,
-      ...renderedEdge(edge, upstreamTargets),
-      type: 'smoothstep',
-      // The legend reads back edge.data?.type to decide which rows to render —
-      // ReactFlow doesn't preserve our custom `type` field at the top level
-      // because it overloads `type` for the edge component identity ("smoothstep").
-      data: { type: edge.type },
-      markerEnd: {
-        type: MarkerType.ArrowClosed,
-        width: 16,
-        height: 16,
-        color: getEdgeColor(edge.type),
-      },
-      style: {
-        stroke: getEdgeColor(edge.type),
-        strokeWidth: edge.type === 'owns' ? 1.5 : 1.75,
-      },
-    }))
+  const edges = shownEdges
+    .map(edge => {
+      // Marching edges keep their own colour, since sky and amber already
+      // mean source and dependsOn here; motion and weight carry the state.
+      // Past the motion budget they keep the dashes and the weight and hold
+      // still.
+      const marching = marches(edge)
+      return {
+        id: `${edge.source}->${edge.target}`,
+        ...renderedEdge(edge, upstreamTargets),
+        type: 'smoothstep',
+        animated: marching && !calm,
+        // The legend reads back edge.data?.type to decide which rows to render —
+        // ReactFlow doesn't preserve our custom `type` field at the top level
+        // because it overloads `type` for the edge component identity ("smoothstep").
+        data: { type: edge.type, flowing: marching },
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          width: 16,
+          height: 16,
+          color: getEdgeColor(edge.type),
+        },
+        style: {
+          stroke: getEdgeColor(edge.type),
+          strokeWidth: marching ? 2.5 : edge.type === 'owns' ? 1.5 : 1.75,
+          // The dash pattern React Flow's own animation draws, without the animation.
+          ...(marching && calm ? { strokeDasharray: '5' } : {}),
+        },
+      }
+    })
 
-  return { nodes, edges }
+  return { nodes, edges, calm }
 }
 
 function applyPreset(tree: GitOpsResourceTree, preset: GitOpsTreePreset, expandedGroups?: Set<string>): GitOpsResourceTree {
@@ -538,11 +589,41 @@ function positionRanks(ranks: Map<number, string[]>, nodes: Map<string, GitOpsTr
   return positioned
 }
 
-const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<Node<{ node: GitOpsTreeNode; highlighted?: boolean; cause?: NodeCause }>>) {
+// Past the motion budget the cards' timers tick every five seconds: dozens or
+// hundreds of cards re-rendering every second is the cost the budget cuts.
+const CALM_CLOCK_MS = 5000
+
+const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<Node<{ node: GitOpsTreeNode; highlighted?: boolean; cause?: NodeCause; calm?: boolean }>>) {
   const node = data.node
   const kind = normalizeDisplayKind(node)
-  const status = node.missing ? 'unhealthy' : normalizeHealth(node.topologyStatus)
+  const status = nodeTone(node)
   const terminating = isNodeTerminating(node)
+  const inFlight = nodeInFlight(node)
+  // Past the tree's motion budget a card keeps the spinner and the timer and
+  // drops the rest (treeMotion).
+  const lively = inFlight && !data.calm
+  // Parked until a person acts: held still and amber, the opposite of the
+  // motion that marks a controller at work.
+  const awaiting = nodeAwaiting(node)
+  const renderAwaitingAction = useContext(AwaitingActionContext)
+  const awaitingControl = awaiting && renderAwaitingAction ? renderAwaitingAction(node, awaiting) : null
+  // A rollout under way and standing still between two steps: said in the
+  // workload page's words, so the card does not read as settled.
+  const hold = nodeRolloutHold(node)
+  // A rollout that cannot go on (its new revision cannot start): the reason
+  // takes the place of Radar's replica-count health word, which reads
+  // "Progressing" for a crash loop as well as for a rollout.
+  const stall = !inFlight && !awaiting && !terminating && !node.missing ? rolloutStall(node.data) : undefined
+  const HoldIcon = hold?.phase === 'waiting' ? Clock3 : Pause
+  // How long the controller has been at it, against the timeout it works to:
+  // past half of it the time turns amber, the "this is taking long" a stuck
+  // pass needs, before the controller itself gives up.
+  const since = inFlight ? inFlightSince(node) : undefined
+  const now = useNow(Boolean(since), data.calm ? CALM_CLOCK_MS : 1000)
+  const elapsedMs = since ? now - Date.parse(since) : NaN
+  const timeoutMs = inFlightTimeoutMs(node)
+  const slow = Number.isFinite(elapsedMs) && timeoutMs !== undefined && elapsedMs > timeoutMs / 2
+  const note = inFlight ? inFlightNote(node) : awaiting ? awaitingNote(awaiting) : hold ? awaitingNote(hold) : stall ? awaitingNote(stall) : ''
   const gitopsTool = gitopsToolForNode(node)
   const chips = buildChips(node)
   const dim = getNodeDimensions(node)
@@ -577,6 +658,7 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
             : status === 'healthy' && 'border-l-green-500',
           !terminating && status === 'degraded' && 'border-l-yellow-500',
           !terminating && status === 'unhealthy' && 'border-l-red-500',
+          !terminating && status === 'neutral' && 'border-l-sky-500',
           !terminating && status === 'unknown' && 'border-l-slate-500',
           // GitOps portal nodes get a slightly stronger ring so the user's
           // eye picks them out from generic K8s leaves. Combined with the
@@ -584,6 +666,9 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
           // "click me to dive into this CR's own GitOps view" without
           // making the node look broken or alarming.
           gitopsTool && !data.highlighted && 'ring-1 ring-skyhook-500/30 hover:ring-skyhook-500/60',
+          // Waiting on a person: an amber outline, so the one node in a tree
+          // that needs someone stands out from the ones that are fine.
+          awaiting && !data.highlighted && 'ring-1 ring-amber-500/70',
           gitopsTool && 'cursor-pointer',
           // Group nodes are interactive (click toggles expand) but the
           // default ReactFlow handler doesn't add a hover state. A subtle
@@ -615,7 +700,13 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
                 {gitopsTool === 'argocd' ? 'Argo' : 'Flux'}
               </span>
             )}
-            <span className={clsx('ml-auto h-1.5 w-1.5 rounded-full', getStatusDotColor(status))} />
+            {/* Work in flight: the dot pings (a radar sweep, the product's own
+                metaphor) while the subtitle carries the spinner, so one card
+                never shows two spinners for one fact. */}
+            <span className={clsx('relative ml-auto flex shrink-0', inFlight ? 'h-2 w-2' : 'h-1.5 w-1.5')}>
+              {lively && <span className={clsx('absolute inline-flex h-full w-full animate-ping rounded-full opacity-75', inFlightBg(status))} />}
+              <span className={clsx('relative inline-flex h-full w-full rounded-full', inFlight ? inFlightBg(status) : getStatusDotColor(status))} />
+            </span>
           </div>
           <div className="truncate pr-1 text-sm font-medium text-theme-text-primary">{node.ref.name}</div>
           {/* Group nodes get a chevron at the bottom-right to advertise the
@@ -624,13 +715,50 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
               own page". The subtitle text alone wasn't enough — users were
               treating the count as an immutable fact rather than a button. */}
           <div className="mt-0.5 flex items-center gap-1 text-xs text-theme-text-secondary">
+            {/* The same Loader2 the fleet row and the detail header spin for the
+                same state, at the size of the words it qualifies: the tree
+                stops being the one GitOps surface where a rollout looks the
+                same as a stall. The light sweep marks activity and never
+                fakes progress. */}
+            {inFlight && (
+              <Loader2
+                className={clsx('h-3.5 w-3.5 shrink-0 animate-spin', inFlightText(status))}
+                aria-label="Reconcile in progress"
+              />
+            )}
+            {awaiting && <Hand className="h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />}
             {portsTooltip ? (
               <Tooltip content={portsTooltip} position="bottom" wrapperClassName="min-w-0">
                 <span className="cursor-help truncate">{subtitle}</span>
               </Tooltip>
+            ) : awaiting ? (
+              // What is being waited for takes the place of a health word that
+              // only repeats the colours (Healthy, Progressing, Suspended); a
+              // failing one stays in front of it.
+              <span className="truncate">
+                {statePrefix(node)}
+                <span className="font-medium text-amber-700 dark:text-amber-400">{awaiting.label}</span>
+              </span>
+            ) : stall ? (
+              <span className="truncate">
+                {statePrefix(node)}
+                <span className="font-medium text-red-600 dark:text-red-400">{stall.label}</span>
+                {node.info?.[0]?.value ? ` • ${node.info[0].value}` : ''}
+              </span>
+            ) : hold ? (
+              <span className="flex min-w-0 items-center gap-1">
+                <HoldIcon className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" aria-hidden />
+                <span className="truncate">{statePrefix(node)}{hold.label}</span>
+              </span>
             ) : (
-              <span className="truncate">{subtitle}</span>
+              <span className={clsx('truncate', lively && 'inflight-shimmer')}>{subtitle}</span>
             )}
+            {Number.isFinite(elapsedMs) && elapsedMs >= 0 && (
+              <span className={clsx('shrink-0 tabular-nums', slow ? 'font-medium text-amber-700 dark:text-amber-400' : 'text-theme-text-tertiary')}>
+                · {formatElapsed(elapsedMs)}{slow && timeoutMs ? ` of ${formatElapsed(timeoutMs)}` : ''}
+              </span>
+            )}
+            {awaitingControl && <span className="ml-auto shrink-0">{awaitingControl}</span>}
             {(node.role === 'group' || gitopsTool) && <ChevronRight className="ml-auto h-3 w-3 shrink-0 text-theme-text-tertiary" />}
           </div>
           {chips.length > 0 && (
@@ -660,13 +788,23 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
             </div>
           )}
         </div>
+        {/* An indeterminate bar along the bottom edge: peripheral vision picks
+            up motion at a card's edge long before it reads a word. */}
+        {lively && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 overflow-hidden" aria-hidden>
+            <div className={clsx('inflight-bar h-full w-1/3 rounded-full', inFlightBg(status))} />
+          </div>
+        )}
       </div>
   )
 
   return (
     <>
       <Handle type="target" position={Position.Left} className="!h-0 !w-0 !border-0 !bg-transparent" />
-      {cause ? <Tooltip content={cause} delay={200}>{card}</Tooltip> : card}
+      {/* A failure's cause wins the hover; otherwise work in flight says what
+          the controller is doing (Flux's or Argo's own message, or the
+          rollout's progress), and a parked node what it is waiting for. */}
+      {cause || note ? <Tooltip content={cause || note} delay={200}>{card}</Tooltip> : card}
       <Handle type="source" position={Position.Right} className="!h-0 !w-0 !border-0 !bg-transparent" />
     </>
   )
@@ -674,14 +812,6 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
 
 const nodeTypes: NodeTypes = {
   gitopsResource: GitOpsResourceNode,
-}
-
-// isNodeTerminating returns true when the backend tagged the node with
-// metadata.deletionTimestamp (see enrichNodeFromObject in pkg/gitops/tree).
-// The check tolerates older payloads that don't carry the field — they
-// simply read as not-terminating, which is the safe default.
-function isNodeTerminating(node: GitOpsTreeNode): boolean {
-  return Boolean(node.data?.deletionTimestamp)
 }
 
 // gitopsToolForNode returns 'argocd' | 'fluxcd' | undefined depending on
@@ -779,9 +909,10 @@ export function nodeCause(node: GitOpsTreeNode, cause?: NodeCause): string | und
 // So all three share the line, and "Healthy" is the part that yields when the
 // space is contested. It is the one health value the node already states without
 // words — healthToTopology maps it onto the green status dot and the green left
-// stripe, one value to one colour. Progressing and Suspended are both yellow and
-// Degraded and Missing are both red, so for those the word is the only thing
-// that tells them apart and it keeps its place. "Healthy" gives up the line only
+// stripe, one value to one colour. Degraded and Missing are both red, so for
+// those the word is the only thing that tells them apart and it keeps its
+// place; Progressing and Suspended keep theirs for the same reason colour alone
+// can't carry a state to everyone. "Healthy" gives up the line only
 // when there is a concrete info line to spend it on, so a node with nothing to
 // say instead still reads as Healthy.
 export function getSubtitle(node: GitOpsTreeNode): string {
@@ -798,7 +929,18 @@ export function getSubtitle(node: GitOpsTreeNode): string {
   const health = node.health === 'Healthy' && info ? undefined : node.health
   const parts = [node.sync, health, info].filter(Boolean)
   if (parts.length > 0) return parts.join(' • ')
+  // A resource with no state of its own to show that its controller is
+  // working on (a Flagger Canary mid-analysis) says what the controller says,
+  // rather than its namespace.
+  if (typeof node.data?.inProgressMessage === 'string' && node.data.inProgressMessage) return node.data.inProgressMessage
   return node.ref.namespace || ''
+}
+
+// statePrefix is what stays in front of a waiting or holding label: the sync
+// word, and a health word that says something is wrong.
+function statePrefix(node: GitOpsTreeNode): string {
+  const failing = node.health === 'Degraded' || node.health === 'Missing' ? node.health : undefined
+  return [node.sync, failing].filter(Boolean).map((part) => `${part} • `).join('')
 }
 
 function normalizeDisplayKind(node: GitOpsTreeNode): string {
@@ -806,9 +948,29 @@ function normalizeDisplayKind(node: GitOpsTreeNode): string {
   return node.ref.kind || 'PodGroup'
 }
 
+// In-flight colour: the node's own tone, except an unknown one, whose gray
+// would hide the motion that is the whole point; sky is the neutral
+// "something is happening" tone.
+function inFlightBg(status: HealthStatus): string {
+  return status === 'unknown' ? SEVERITY_DOT.info : SEVERITY_DOT[healthToSeverity(status)]
+}
+
+function inFlightText(status: HealthStatus): string {
+  return status === 'unknown' ? SEVERITY_TEXT.info : SEVERITY_TEXT[healthToSeverity(status)]
+}
+
 function normalizeHealth(status?: string): HealthStatus {
-  if (status === 'healthy' || status === 'degraded' || status === 'unhealthy') return status
+  if (status === 'healthy' || status === 'degraded' || status === 'unhealthy' || status === 'neutral') return status
   return 'unknown'
+}
+
+// nodeTone is the colour a node paints. A paused node is neutral (sky), as on
+// every other surface; the health word covers a backend that still sends
+// Suspended as 'degraded', since the frontend may be newer than it.
+export function nodeTone(node: GitOpsTreeNode): HealthStatus {
+  if (node.missing) return 'unhealthy'
+  if (node.health === 'Suspended') return 'neutral'
+  return normalizeHealth(node.topologyStatus)
 }
 
 function getStatusDotColor(status: HealthStatus): string {

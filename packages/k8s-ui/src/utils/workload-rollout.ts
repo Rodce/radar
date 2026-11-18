@@ -7,7 +7,7 @@ export function canaryStepLabel(step: any): string {
   if (step.setWeight !== undefined) return `Set weight: ${step.setWeight}%`
 
   if (step.pause !== undefined) {
-    return step.pause?.duration ? `Pause: ${step.pause.duration}` : 'Pause: until promoted'
+    return pauseHasDuration(step.pause) ? `Pause: ${step.pause.duration}` : 'Pause: until promoted'
   }
 
   if (step.analysis) {
@@ -73,6 +73,15 @@ export interface WorkloadRolloutActivity {
   updated: number
   ready: number
   available: number
+  /** The pause an Argo Rollout waits for promotion at (argoPromotionGate); absent otherwise and from older Radars. */
+  gate?: string
+}
+
+// isArgoRolloutRef is isArgoRolloutResource for a reference ({group, kind}):
+// the one kind Radar can promote itself. Argo Rollouts takes a promote through
+// its API, while a Flagger gate is a webhook only its owner can answer.
+export function isArgoRolloutRef(ref: { group?: string; kind?: string }): boolean {
+  return ref.kind === 'Rollout' && ref.group === 'argoproj.io'
 }
 
 export function isArgoRolloutResource(resource: any): boolean {
@@ -83,6 +92,21 @@ export function rolloutMayAdvanceAutomatically(activity: WorkloadRolloutActivity
   return activity.phase === 'applying' ||
     activity.phase === 'progressing' ||
     (activity.phase === 'waiting' && !activity.manual)
+}
+
+// rolloutIsMoving is the rule every rollout spinner turns on: a rollout the
+// controller is applying or progressing. Waiting, paused and stalled rollouts
+// are still shown, but they don't spin: nothing is moving.
+export function rolloutIsMoving(activity?: Pick<WorkloadRolloutActivity, 'active' | 'phase'> | null): boolean {
+  return Boolean(activity?.active && (activity.phase === 'applying' || activity.phase === 'progressing'))
+}
+
+// rolloutAwaitsAction is the rule every "waiting for you" mark turns on: a
+// rollout that will not move until a person acts (an Argo Rollout on an
+// untimed pause, a workload whose strategy waits for its Pods to be deleted by
+// hand). The backend's topology uses the same two fields for data.awaiting.
+export function rolloutAwaitsAction(activity?: Pick<WorkloadRolloutActivity, 'active' | 'manual'> | null): boolean {
+  return Boolean(activity?.active && activity.manual)
 }
 
 export function isRolloutActivityVisible(activity: WorkloadRolloutActivity): boolean {
@@ -244,8 +268,12 @@ function argoRolloutActivity(resource: any): WorkloadRolloutActivity {
     case 'failed':
     case 'aborted':
       return merge(base, 'stalled', false, 'Rollout stalled', status.message || 'The Rollout controller reported a failed revision')
-    case 'paused':
-      return merge(base, 'paused', true, 'Rollout paused', detail)
+    case 'paused': {
+      const awaited = argoAwaitedAction(resource)
+      if (!awaited) return merge(base, 'paused', true, 'Rollout paused', detail)
+      const waiting = mergeManual(base, 'paused', true, awaited, detail)
+      return awaited === 'Waiting for promotion' ? { ...waiting, gate: argoPromotionGate(resource) } : waiting
+    }
     case 'progressing':
       return updated === 0
         ? merge(base, 'waiting', true, 'Waiting for new revision', detail)
@@ -259,13 +287,74 @@ function argoRolloutActivity(resource: any): WorkloadRolloutActivity {
   }
 }
 
+// Mirrors pkg/health/workload_rollout.go's ArgoPromotionGate: where the
+// Rollout stands (canary step or blue-green revision) and when the controller
+// recorded the pause, so a promote confirmed for one pause never clears the
+// next one, which reads "Waiting for promotion" too.
+export function argoPromotionGate(resource: any): string {
+  let started = ''
+  const pauses = resource?.status?.pauseConditions
+  for (const pause of Array.isArray(pauses) ? pauses : []) {
+    if (typeof pause?.startTime === 'string' && pause.startTime > started) started = pause.startTime
+  }
+  const blueGreen = resource?.spec?.strategy?.blueGreen
+  if (blueGreen && typeof blueGreen === 'object') {
+    const hash = resource?.status?.currentPodHash
+    return `pod:${typeof hash === 'string' ? hash : ''}@${started}`
+  }
+  const index = resource?.status?.currentStepIndex
+  return `step:${typeof index === 'number' ? index : 0}@${started}`
+}
+
+// Mirrors pkg/health/workload_rollout.go's argoAwaitedAction exactly: what a
+// paused Rollout is waiting on someone for, or '' when it is waiting on no
+// one. Only a pause the controller recorded counts: right after a promote the
+// stored phase still says Paused with the pause conditions already gone, and
+// a pause a person set (spec.paused) is left to that person. Checked against
+// the same golden fixture as the rest of this file.
+function argoAwaitedAction(resource: any): string {
+  if (resource?.spec?.paused === true) return ''
+  const recorded = resource?.status?.pauseConditions
+  const reasons = new Set<string>(
+    (Array.isArray(recorded) ? recorded : []).map((pause: any) => pause?.reason).filter(Boolean),
+  )
+  if (reasons.has('InconclusiveAnalysisRun')) return 'Analysis inconclusive'
+  if (reasons.has('InconclusiveExperiment')) return 'Experiment inconclusive'
+  const blueGreen = resource?.spec?.strategy?.blueGreen
+  if (blueGreen && typeof blueGreen === 'object') {
+    // With auto-promotion off the controller ignores autoPromotionSeconds.
+    return reasons.has('BlueGreenPause') && blueGreen.autoPromotionEnabled === false
+      ? 'Waiting for promotion'
+      : ''
+  }
+  if (!reasons.has('CanaryPauseStep')) return ''
+  const steps = resource?.spec?.strategy?.canary?.steps || []
+  const index = resource?.status?.currentStepIndex
+  if (typeof index !== 'number' || index < 0 || index >= steps.length) return ''
+  const step = steps[index]
+  if (!step || typeof step !== 'object' || !('pause' in step)) return ''
+  // Argo Rollouts reads a missing or empty duration as "until promoted"; any
+  // other value, 0 included, ends the pause by itself.
+  return pauseHasDuration(step.pause) ? '' : 'Waiting for promotion'
+}
+
+function pauseHasDuration(pause: any): boolean {
+  const duration = pause?.duration
+  return duration !== undefined && duration !== null && duration !== ''
+}
+
 function withUpdatedRevisionFailure(
   rollout: WorkloadRolloutActivity,
   pods?: WorkloadPodInfo[],
 ): WorkloadRolloutActivity {
   if ((!rollout.active && rollout.phase !== 'stalled') || rollout.phase === 'applying' || !pods) return rollout
+  // The server decides it per Pod (revisionFailing, from pkg/health
+  // RevisionPodFailing), as it does for the tree and the applications list: a
+  // crash-looping Pod can pass its probes between restarts, and a Pod being
+  // deleted says nothing. An older Radar sends no verdict; then an unhealthy
+  // Pod that has not ended (evicted, stopped with its node) is the best read.
   const failed = pods
-    .filter((pod) => pod.updatedRevision === true && pod.healthLevel === 'unhealthy')
+    .filter((pod) => pod.updatedRevision === true && (pod.revisionFailing ?? (pod.healthLevel === 'unhealthy' && pod.phase !== 'Failed' && pod.phase !== 'Succeeded')))
     .sort((a, b) => a.name.localeCompare(b.name))[0]
   if (!failed) return rollout
   const reason = failed.reason || failed.lastTerminationReason || failed.phase || 'Pod failed'
@@ -322,7 +411,7 @@ function merge(
   label: string,
   detail: string,
 ): WorkloadRolloutActivity {
-  return { ...base, phase, active, manual: false, label, detail }
+  return { ...base, phase, active, manual: false, label, detail, gate: undefined }
 }
 
 function mergeManual(
@@ -332,7 +421,7 @@ function mergeManual(
   label: string,
   detail: string,
 ): WorkloadRolloutActivity {
-  return { ...base, phase, active, manual: true, label, detail }
+  return { ...base, phase, active, manual: true, label, detail, gate: undefined }
 }
 
 export function rolloutActivityLevel(activity: WorkloadRolloutActivity): 'healthy' | 'neutral' | 'degraded' | 'unhealthy' {

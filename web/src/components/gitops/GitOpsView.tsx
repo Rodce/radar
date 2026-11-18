@@ -4,6 +4,11 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import yaml from 'yaml'
 import { hasHealthSettingsHint } from '@skyhook-io/k8s-ui/components/gitops/GitOpsHealthSourceNotice'
+import { nodeAwaiting, nodeInFlight } from '@skyhook-io/k8s-ui/utils/gitops-in-flight'
+import { awaitsPromotion } from '@skyhook-io/k8s-ui/utils/awaiting-action'
+import { isArgoRolloutRef } from '@skyhook-io/k8s-ui/utils/workload-rollout'
+import { Hand, Loader2 } from 'lucide-react'
+import { RolloutPromoteButton, RolloutPromoteProvider } from '../workload/RolloutPromote'
 import { previousSettingsNote, usePreviousIntegrationSettings } from '../../hooks/usePreviousIntegrationSettings'
 import {
   GitOpsActivityInsightView,
@@ -921,19 +926,24 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
               onToggleRole={(value) => toggleSet(graphRoles, setGraphRoles, value)}
             />
             <div className="min-h-0 min-w-0 border-l border-theme-border max-lg:border-l-0 max-lg:border-t">
-              <GitOpsTreeGraph
-                tree={tree}
-                loading={treeQ.isLoading}
-                error={treeQ.error as Error | null}
-                onNodeClick={openResourceFromTree}
-                preset={graphPreset}
-                onPresetChange={setGraphPreset}
-                query={graphSearch}
-                onQueryChange={setGraphSearch}
-                filters={graphFilters}
-                showToolbar={false}
-                issues={insightsQ.data?.issues}
-              />
+              <RolloutPromoteProvider>
+                <GitOpsTreeGraph
+                  tree={tree}
+                  loading={treeQ.isLoading}
+                  error={treeQ.error as Error | null}
+                  onNodeClick={openResourceFromTree}
+                  preset={graphPreset}
+                  onPresetChange={setGraphPreset}
+                  query={graphSearch}
+                  onQueryChange={setGraphSearch}
+                  filters={graphFilters}
+                  showToolbar={false}
+                  issues={insightsQ.data?.issues}
+                  // Dialogs sit below the fullscreen layer, so a Promote
+                  // confirmation opened there would be hidden behind it.
+                  renderAwaitingAction={graphFullscreen ? undefined : renderAwaitingAction}
+                />
+              </RolloutPromoteProvider>
             </div>
           </div>
         )
@@ -1168,6 +1178,16 @@ function terminationStartedAt(resource: any): string | undefined {
 }
 
 
+// What Radar can do for a tree node that waits on a person: promote an Argo
+// Rollout parked at a promotion gate. A Flagger Canary waits on a webhook only
+// its owner can answer, and an inconclusive analysis is a choice between
+// promote and abort, made on the Rollout's own page beside the analysis; those
+// only say what they wait for.
+function renderAwaitingAction(node: GitOpsTreeNode, awaiting: { label: string; detail?: string; gate?: string }) {
+  if (!isArgoRolloutRef(node.ref) || !node.ref.namespace || !awaitsPromotion(awaiting.label)) return null
+  return <RolloutPromoteButton namespace={node.ref.namespace} name={node.ref.name} waitingFor={awaiting.detail} gate={awaiting.gate} />
+}
+
 // Inline counts for the topology toolbar — answers "how many resources, how
 // many of them are healthy / drifted" at a glance, without making the user
 // count facets in the filter rail.
@@ -1187,11 +1207,17 @@ function TopologyCounts({ tree }: { tree: GitOpsResourceTree }) {
   const degraded = nodes.filter(isDegraded).length
   const failingDependencies = counted.filter((n) => n.dependency && isDegraded(n)).length
   const outOfSync = nodes.filter((n) => (n.sync || '').toLowerCase() === 'outofsync').length
+  // Work in flight right now, by the same rule that spins the nodes below.
+  const inFlight = counted.filter(nodeInFlight).length
+  // Parked until a person acts, by the rule that outlines those nodes.
+  const awaiting = counted.filter((n) => nodeAwaiting(n) !== undefined).length
   return (
     <div className="hidden min-w-0 flex-1 items-center gap-3 truncate text-[11px] text-theme-text-tertiary sm:flex">
       <span><span className="text-theme-text-primary">{total}</span> resources shown</span>
       {dependencies > 0 && <span><span className="text-theme-text-primary">{dependencies}</span> {dependencies === 1 ? 'dependency' : 'dependencies'}</span>}
       {failingDependencies > 0 && <span className="flex items-center gap-1 font-medium text-red-600 dark:text-red-400"><span className="h-1.5 w-1.5 rounded-full bg-red-500" /> {failingDependencies} {failingDependencies === 1 ? 'dependency' : 'dependencies'} failing</span>}
+      {inFlight > 0 && <span className="flex items-center gap-1 font-medium text-sky-700 dark:text-sky-400"><Loader2 className="h-3 w-3 animate-spin" aria-hidden /> {inFlight} in progress</span>}
+      {awaiting > 0 && <span className="flex items-center gap-1 font-medium text-amber-700 dark:text-amber-400"><Hand className="h-3 w-3" aria-hidden /> {awaiting} waiting for action</span>}
       {healthy > 0 && <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> {healthy} healthy</span>}
       {/* Bad-news counts use status colors on the number itself so the worst
           fact in the row visually pops, not just the dot next to it. */}

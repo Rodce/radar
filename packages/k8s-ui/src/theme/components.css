@@ -338,3 +338,50 @@
   .reach-node-testing,
   .reach-label-testing { animation: none; }
 }
+
+/* Work in flight: a controller is at something right now (a GitOps pass, a
+   rollout). Lives with the package because the GitOps tree, the workload view
+   and the applications view all use it, in every host. Both cues only mark
+   active work and never fake progress. Spinners carry the state on their own,
+   so under reduced motion the bar goes away and the text sits still. */
+
+/* inflight-bar: an indeterminate sweep along an edge of the thing at work. */
+@keyframes inflight-sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(300%); }
+}
+.inflight-bar {
+  animation: inflight-sweep 1.6s ease-in-out infinite;
+}
+
+/* inflight-shimmer: an accent light-sweep across muted text. background-clip
+   paints the gradient into the glyphs. */
+@keyframes inflight-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+.inflight-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--text-tertiary) 0%,
+    var(--text-tertiary) 38%,
+    var(--accent) 50%,
+    var(--text-tertiary) 62%,
+    var(--text-tertiary) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: inflight-shimmer 2.4s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .inflight-bar { display: none; }
+  .inflight-shimmer {
+    animation: none;
+    background: none;
+    -webkit-text-fill-color: currentcolor;
+    color: var(--text-secondary);
+  }
+}

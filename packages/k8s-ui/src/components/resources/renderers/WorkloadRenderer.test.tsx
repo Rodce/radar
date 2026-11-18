@@ -61,6 +61,61 @@ describe('WorkloadRenderer', () => {
     expect(html).not.toContain('Rolling out')
   })
 
+  it('does not blame an evicted Pod of the new revision for the rollout', () => {
+    const html = renderToString(
+      <WorkloadRenderer
+        kind="deployments"
+        data={{
+          ...deployment,
+          metadata: { ...deployment.metadata, generation: 2 },
+          status: { observedGeneration: 2, replicas: 4, readyReplicas: 3, availableReplicas: 3, updatedReplicas: 2 },
+        }}
+        workloadPods={[{
+          name: 'api-evicted',
+          containers: ['api'],
+          ready: false,
+          phase: 'Failed',
+          healthLevel: 'unhealthy',
+          reason: 'Evicted',
+          updatedRevision: true,
+        }]}
+      />,
+    )
+
+    expect(html).not.toContain('New revision cannot start')
+    expect(html).toContain('Rolling out')
+  })
+
+  // The server decides per Pod (revisionFailing). A crash-looping Pod passes
+  // its probes between restarts and reads only degraded; one being deleted
+  // still reads unhealthy. The page follows the verdict, not the level.
+  it('takes the revision verdict from the server', () => {
+    const rolling = {
+      ...deployment,
+      metadata: { ...deployment.metadata, generation: 2 },
+      status: { observedGeneration: 2, replicas: 4, readyReplicas: 3, availableReplicas: 3, updatedReplicas: 2 },
+    }
+    const crashLooping = renderToString(
+      <WorkloadRenderer
+        kind="deployments"
+        data={rolling}
+        workloadPods={[{ name: 'api-crashing', containers: ['api'], ready: true, phase: 'Running', healthLevel: 'degraded', reason: 'CrashLoopBackOff', updatedRevision: true, revisionFailing: true }]}
+      />,
+    )
+    expect(crashLooping).toContain('New revision cannot start')
+    expect(crashLooping).toContain('CrashLoopBackOff · Pod api-crashing')
+
+    const deleting = renderToString(
+      <WorkloadRenderer
+        kind="deployments"
+        data={rolling}
+        workloadPods={[{ name: 'api-deleting', containers: ['api'], ready: false, phase: 'Running', healthLevel: 'unhealthy', reason: 'CrashLoopBackOff', updatedRevision: true, revisionFailing: false }]}
+      />,
+    )
+    expect(deleting).not.toContain('New revision cannot start')
+    expect(deleting).toContain('Rolling out')
+  })
+
   it('explains that OnDelete needs a manual Pod restart', () => {
     const html = renderToString(
       <WorkloadRenderer

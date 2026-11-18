@@ -21,6 +21,7 @@ type rolloutGoldenVector struct {
 	Updated   int32           `json:"updated"`
 	Ready     int32           `json:"ready"`
 	Available int32           `json:"available"`
+	Gate      string          `json:"gate"`
 	Object    json.RawMessage `json:"object"`
 }
 
@@ -41,8 +42,8 @@ func TestWorkloadRolloutGoldenVectorsCrossLang(t *testing.T) {
 	for _, vector := range file.Vectors {
 		t.Run(vector.Name, func(t *testing.T) {
 			got := classifyRolloutGolden(t, vector.Kind, vector.Object)
-			if got.Phase != vector.Phase || got.Active != vector.Active || got.Manual != vector.Manual || got.Label != vector.Label || got.Detail != vector.Detail || got.Desired != vector.Desired || got.Updated != vector.Updated || got.Ready != vector.Ready || got.Available != vector.Available {
-				t.Fatalf("got %#v, want phase=%q active=%t manual=%t label=%q detail=%q counts=%d/%d/%d/%d", got, vector.Phase, vector.Active, vector.Manual, vector.Label, vector.Detail, vector.Desired, vector.Updated, vector.Ready, vector.Available)
+			if got.Phase != vector.Phase || got.Active != vector.Active || got.Manual != vector.Manual || got.Label != vector.Label || got.Detail != vector.Detail || got.Desired != vector.Desired || got.Updated != vector.Updated || got.Ready != vector.Ready || got.Available != vector.Available || got.Gate != vector.Gate {
+				t.Fatalf("got %#v, want phase=%q active=%t manual=%t label=%q detail=%q counts=%d/%d/%d/%d gate=%q", got, vector.Phase, vector.Active, vector.Manual, vector.Label, vector.Detail, vector.Desired, vector.Updated, vector.Ready, vector.Available, vector.Gate)
 			}
 		})
 	}

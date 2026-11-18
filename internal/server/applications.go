@@ -156,6 +156,17 @@ type appRow struct {
 type appSourceStatus struct {
 	Sync   string `json:"sync,omitempty"`
 	Health string `json:"health,omitempty"`
+	// What the source's controller is doing right now, refreshed from the
+	// live object at response time (withLiveSourceActivity): paused on
+	// purpose, a pass or sync operation in flight and since when, the timeout
+	// it works against, a requested reconcile not yet picked up, and the
+	// controller's own message while it works or fails.
+	Suspended          bool   `json:"suspended,omitempty"`
+	Reconciling        bool   `json:"reconciling,omitempty"`
+	ReconcileRequested bool   `json:"reconcileRequested,omitempty"`
+	Since              string `json:"since,omitempty"`
+	Timeout            string `json:"timeout,omitempty"`
+	Message            string `json:"message,omitempty"`
 }
 
 // appSourceRef is the source-of-truth object when the grouping signal names one
@@ -322,6 +333,9 @@ func (s *Server) handleListApplications(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	out := *s.filterApplicationsForUser(r, resp)
+	if cache := k8s.GetResourceCache(); cache != nil {
+		out.Applications = withLiveSourceActivity(r.Context(), cache, out.Applications)
+	}
 	if perms := k8s.GetCachedPermissionResult(); !accessUnknown && perms != nil {
 		out.Access = &applicationsAccess{Restricted: applicationsViewRestricted(parseNamespaces(r.URL.Query()), namespaces, perms.ReadsApplicationsInEvery)}
 	}
@@ -654,6 +668,7 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 		appSetByKey := appSetFanouts(appSetChildren)
 		enrichRowsWithManagedSourceRefs(buildCtx, cache, rows, argoItems)
 		enrichRowsWithArgoStatus(rows, argoItems)
+		enrichRowsWithFluxStatus(buildCtx, cache, rows)
 		resolveAppIdentities(rows, sourcePaths, appSetByKey, namespaceEnvLabels(cache), fluxKustomizationFacts(buildCtx, cache))
 		foldJobSetApplicationWorkloads(rows)
 		claims := collectArgoClaims(argoItems, sourcePaths, appSetByKey, namespaces)
@@ -1301,29 +1316,20 @@ func applicationRevisionTargets(ctx context.Context, cache *k8s.ResourceCache, n
 }
 
 func attributeApplicationRolloutFailure(activity *health.WorkloadRolloutActivity, pods []*corev1.Pod, target workloadRevisionTarget) *health.WorkloadRolloutActivity {
-	if activity == nil || (!activity.Active && activity.Phase != health.RolloutStalled) || activity.Phase == health.RolloutApplying || target.label == "" || target.value == "" {
+	if activity == nil || target.label == "" || target.value == "" {
 		return activity
 	}
-	now := time.Now()
-	var failed *corev1.Pod
+	var updated []*corev1.Pod
 	for _, pod := range pods {
-		if pod.Labels[target.label] != target.value || health.Pod(pod, now).Level != health.LevelUnhealthy {
-			continue
-		}
-		if failed == nil || pod.Name < failed.Name {
-			failed = pod
+		if pod.Labels[target.label] == target.value {
+			updated = append(updated, pod)
 		}
 	}
-	if failed == nil {
+	attributed := health.UpdatedRevisionFailure(*activity, updated, time.Now())
+	if attributed == *activity {
 		return activity
 	}
-	copy := *activity
-	copy.Phase = health.RolloutStalled
-	copy.Active = false
-	copy.Manual = false
-	copy.Label = "New revision cannot start"
-	copy.Detail = fmt.Sprintf("%s · Pod %s", health.PodProblemReason(failed, now), failed.Name)
-	return &copy
+	return &attributed
 }
 
 func appDesiredReplicas(replicas *int32) int {

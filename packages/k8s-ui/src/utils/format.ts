@@ -347,3 +347,26 @@ export function midTruncate(s: string, max = 24): string {
   const head = max - tail - 1
   return `${s.slice(0, head)}…${s.slice(-tail)}`
 }
+
+// parseGoDuration reads a Kubernetes duration such as "10m", "1h30m" or
+// "5m0s"; anything else is unknown.
+export function parseGoDuration(value?: string): number | undefined {
+  if (!value) return undefined
+  const unit: Record<string, number> = { h: 3_600_000, m: 60_000, s: 1000, ms: 1 }
+  let total = 0
+  let consumed = ''
+  for (const match of value.matchAll(/(\d+(?:\.\d+)?)(ms|h|m|s)/g)) {
+    total += Number(match[1]) * unit[match[2]]
+    consumed += match[0]
+  }
+  return consumed === value && total > 0 ? total : undefined
+}
+
+// formatElapsed is a short ticking duration: 18s, 2m 05s, 1h 04m.
+export function formatElapsed(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000))
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ${String(seconds % 60).padStart(2, '0')}s`
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m`
+}

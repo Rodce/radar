@@ -50,3 +50,22 @@ export function hasGitOpsTreeFilters(filters?: GitOpsTreeFilters): boolean {
     gitOpsFilterSet(filters.roles),
   )
 }
+
+// The in-flight rules live in utils so the API client's polling and the page
+// header can read them without loading the graph; the graph reads them here.
+export {
+  flowingSources,
+  inFlightKind,
+  inFlightNodeIDs,
+  inFlightNote,
+  inFlightSince,
+  inFlightTimeoutMs,
+  isNodeTerminating,
+  nodeAwaiting,
+  nodeInFlight,
+  nodeRolloutHold,
+  treeMotion,
+  treePollInterval,
+  TREE_MOTION_BUDGET,
+  type InFlightKind,
+} from '../../../utils/gitops-in-flight'

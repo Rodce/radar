@@ -29,6 +29,7 @@ import {
 import type { HelmHook, HelmRevision, HooksDiff, ResourceDiff } from '../../types'
 import { getHelmStatusColor, getKindBadgeColor, SEVERITY_BADGE } from '../../utils/badge-colors'
 import { formatDate } from './helm-utils'
+import { HelmReleaseStatusBadge } from './HelmReleaseStatusBadge'
 import { Tooltip } from '../ui/Tooltip'
 import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
@@ -172,9 +173,7 @@ export function HelmCompareRoute() {
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <Package className="h-5 w-5 shrink-0 text-purple-400" />
               <h1 className="truncate text-lg font-semibold text-theme-text-primary">{releaseName}</h1>
-              {release && (
-                <span className={clsx('badge', getHelmStatusColor(release.status))}>{release.status}</span>
-              )}
+              {release && <HelmReleaseStatusBadge release={release} />}
               {storageNamespace && storageNamespace !== releaseRef.namespace && (
                 <span className={clsx('badge', SEVERITY_BADGE.neutral)}>stored in {storageNamespace}</span>
               )}

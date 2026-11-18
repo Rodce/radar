@@ -41,10 +41,15 @@ func containerInfo(cs corev1.ContainerStatus) ContainerInfo {
 }
 
 // PodInfo contains compact runtime status about a pod for workload views.
+// Starting (health.IsPodStarting) and RevisionFailing
+// (health.RevisionPodFailing) are sent even when false, so a client can tell
+// a no from a Radar that predates the field.
 type PodInfo struct {
 	Name                  string          `json:"name"`
 	Containers            []string        `json:"containers"`
 	Ready                 bool            `json:"ready"`
+	Starting              bool            `json:"starting"`
+	RevisionFailing       bool            `json:"revisionFailing"`
 	Phase                 string          `json:"phase,omitempty"`
 	NodeName              string          `json:"nodeName,omitempty"`
 	HealthLevel           string          `json:"healthLevel,omitempty"`
@@ -130,6 +135,8 @@ func BuildPodInfo(pod *corev1.Pod, now time.Time) PodInfo {
 		Name:                  pod.Name,
 		Containers:            containers,
 		Ready:                 IsPodReady(pod),
+		Starting:              health.IsPodStarting(pod, now),
+		RevisionFailing:       health.RevisionPodFailing(pod, now),
 		Phase:                 string(pod.Status.Phase),
 		NodeName:              pod.Spec.NodeName,
 		HealthLevel:           string(verdict.Level),

@@ -412,6 +412,7 @@ html.radar-custom-titlebar .fixed.top-0:not([data-radar-titlebar]) {
   animation: ai-shimmer 2.4s linear infinite;
 }
 
+
 /* Synthesis "thinking" dot — a calm breathing pulse (not a spinner) for the staged
    pre-verdict beats. */
 /* Results enter with the same short spatial motion as new transcript/evidence rows.

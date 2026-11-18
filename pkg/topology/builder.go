@@ -343,6 +343,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	nodes := make([]Node, 0)
 	edges := make([]Edge, 0)
 	warnings := make([]string, 0)
+	now := time.Now()
+	startup := b.podStartupTallies(now)
+	revisions := newRevisionIndex(b.provider)
 
 	// Track IDs for linking
 	deploymentIDs := make(map[string]string)
@@ -444,6 +447,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				"statusIssue":   statusIssue,
 			},
 		})
+		annotateWorkloadRollout(nodes[len(nodes)-1].Data, deploy, revisions, now)
+		applyStarting(&nodes[len(nodes)-1], startup[deploy.UID], total-ready)
 
 		// Track ConfigMap/Secret/PVC references
 		refs := extractWorkloadReferences(deploy.Spec.Template.Spec, opts.ForRelationshipCache)
@@ -586,6 +591,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				rolloutData["stableWeight"] = *stableWeight
 			}
 			rolloutDataByID[rolloutID] = rolloutData
+			annotateWorkloadRollout(rolloutData, rollout, revisions, now)
 
 			nodes = append(nodes, Node{
 				ID:     rolloutID,
@@ -794,6 +800,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					"apiVersion":    ks.GetAPIVersion(),
 				},
 			})
+			annotateFluxActivity(nodes[len(nodes)-1].Data, ks)
 
 			// Store for second pass edge creation
 			kustomizationResources = append(kustomizationResources, ks)
@@ -861,6 +868,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					"apiVersion": repo.GetAPIVersion(),
 				},
 			})
+			annotateFluxActivity(nodes[len(nodes)-1].Data, repo)
 		}
 	}
 
@@ -938,6 +946,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					"apiVersion":   hr.GetAPIVersion(),
 				},
 			})
+			annotateFluxActivity(nodes[len(nodes)-1].Data, hr)
 		}
 	}
 
@@ -975,6 +984,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					"apiVersion": cert.GetAPIVersion(),
 				},
 			})
+			AnnotateResourceProgress(nodes[len(nodes)-1].Data, cert, time.Now())
 			certificateResources = append(certificateResources, *cert)
 			if secretName, _, _ := unstructured.NestedString(cert.Object, "spec", "secretName"); secretName != "" {
 				certBySecret[ns+"/"+secretName] = certID
@@ -2624,6 +2634,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				"statusIssue":   statusIssue,
 			},
 		})
+		annotateWorkloadRollout(nodes[len(nodes)-1].Data, ds, revisions, now)
+		applyStarting(&nodes[len(nodes)-1], startup[ds.UID], total-ready)
 
 		refs := extractWorkloadReferences(ds.Spec.Template.Spec, opts.ForRelationshipCache)
 		trackWorkloadRefs(dsID, ds.Namespace, refs)
@@ -2676,6 +2688,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				"statusIssue":   statusIssue,
 			},
 		})
+		annotateWorkloadRollout(nodes[len(nodes)-1].Data, sts, revisions, now)
+		applyStarting(&nodes[len(nodes)-1], startup[sts.UID], total-ready)
 
 		refs := extractWorkloadReferences(sts.Spec.Template.Spec, opts.ForRelationshipCache)
 		trackWorkloadRefs(stsID, sts.Namespace, refs)
@@ -3164,6 +3178,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Status: healthLevelToStatus(health.Workload(rs, time.Now()).Level),
 				Data:   rsData,
 			})
+			applyStarting(&nodes[len(nodes)-1], startup[rs.UID], total-ready)
 
 			if opts.ForRelationshipCache {
 				trackWorkloadRefs(rsID, rs.Namespace, extractWorkloadReferences(rs.Spec.Template.Spec, true))
@@ -7626,6 +7641,7 @@ func (b *Builder) enrollGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOp
 	type candidate struct {
 		nodeID      string
 		node        Node
+		resource    *unstructured.Unstructured
 		ownerRefs   []ResourceRef
 		ownerUIDs   []types.UID
 		resourceKey string
@@ -7723,18 +7739,20 @@ func (b *Builder) enrollGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOp
 			if len(ownerResources) == 0 {
 				continue
 			}
+			data := map[string]any{
+				"namespace":  ns,
+				"labels":     resource.GetLabels(),
+				"apiVersion": resource.GetAPIVersion(),
+			}
 			candidates = append(candidates, candidate{
-				nodeID: nodeID,
+				nodeID:   nodeID,
+				resource: resource,
 				node: Node{
 					ID:     nodeID,
 					Kind:   NodeKind(kind),
 					Name:   name,
 					Status: extractGenericStatus(resource),
-					Data: map[string]any{
-						"namespace":  ns,
-						"labels":     resource.GetLabels(),
-						"apiVersion": resource.GetAPIVersion(),
-					},
+					Data:   data,
 				},
 				ownerRefs:   ownerResources,
 				ownerUIDs:   ownerResourceUIDs,
@@ -7778,6 +7796,9 @@ func (b *Builder) enrollGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOp
 
 			if len(ownerEdges) > 0 {
 				if !c.existing {
+					// Annotated only here, for the candidates that become
+					// nodes: the rest are dropped or drawn elsewhere.
+					AnnotateResourceProgress(c.node.Data, c.resource, time.Now())
 					nodes = append(nodes, c.node)
 					existingIDs[c.nodeID] = true
 					existingResourceIDs[c.resourceKey] = c.nodeID

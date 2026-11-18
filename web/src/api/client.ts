@@ -7,6 +7,9 @@ import type { WorkloadHistoryCoverage } from '@skyhook-io/k8s-ui/utils/workload-
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useEffect, useRef, useCallback, useMemo } from 'react'
 import { argoSyncOptionsForRequest } from '@skyhook-io/k8s-ui'
+import { treePollInterval } from '@skyhook-io/k8s-ui/utils/gitops-in-flight'
+import { applicationsPollInterval } from '@skyhook-io/k8s-ui/utils/applications'
+import { helmReleaseActivity } from '@skyhook-io/k8s-ui/utils/helm-status'
 import { useClusterConnected } from '../context/clusterConnected'
 import type { KueueAdmissionResponse, KueuePositionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
 import type { KueueQueueMembership, KueueQueueWorkloadsResponse } from '@skyhook-io/k8s-ui/types/kueue-queues'
@@ -2721,9 +2724,12 @@ export function useApplications(
     // Only poll while a consumer needs the index; gated off it must not keep the
     // background refetch alive. A Radar that predates the endpoint never will.
     enabled,
+    // While an app is mid-delivery or mid-rollout the list polls faster
+    // (applicationsPollInterval): at the minute-long default a 30s upgrade
+    // shows late or not at all. It settles back once nothing moves.
     refetchInterval: (query) =>
       enabled && !(query.state.error instanceof RadarFeatureUnsupportedError)
-        ? APPLICATIONS_REFRESH_INTERVAL_MS
+        ? applicationsPollInterval(query.state.data?.applications, Date.now()) ?? APPLICATIONS_REFRESH_INTERVAL_MS
         : false,
   });
 }
@@ -2770,15 +2776,20 @@ function afterFailedFetch(error: unknown, wanted: number | false): number | fals
   return ARGO_RETRYING_POLL_MS;
 }
 
+// While anything in the tree is in flight it polls (treePollInterval), as
+// insights does during an Argo operation. A connection to argocd-server that
+// keeps failing still backs off first: polling it fast is what the backoff
+// is there to prevent, whatever the tree shows.
 export function gitopsTreeRefetchInterval(
-  query: PollState<Pick<GitOpsResourceTree, "healthApiPending" | "healthApiRetrying">>,
+  query: PollState<Pick<GitOpsResourceTree, "healthApiPending" | "healthApiRetrying"> & Partial<Pick<GitOpsResourceTree, "nodes">>>,
+  now = Date.now(),
 ): number | false {
   const data = query.state.data;
   const wanted = data?.healthApiPending
     ? ARGO_CONNECTING_POLL_MS
     : data?.healthApiRetrying
       ? ARGO_RETRYING_POLL_MS
-      : false;
+      : treePollInterval(data?.nodes, now);
   return query.state.status === "error" ? afterFailedFetch(query.state.error, wanted) : wanted;
 }
 
@@ -5822,11 +5833,16 @@ export function useRolloutCapabilities(
   namespace: string,
   name: string,
   enabled = true,
+  // A surface showing many Rollouts at once (a graph, a list) asks once per
+  // Rollout and can live with an answer a little old: each ask reads the
+  // Rollout live and checks permissions on the server.
+  options?: { staleTime?: number },
 ) {
   return useQuery<RolloutCapabilities>({
     queryKey: ["rollout-capabilities", namespace, name],
     queryFn: () => fetchJSON(`/rollouts/${namespace}/${name}/capabilities`),
     enabled: Boolean(namespace && name && enabled),
+    staleTime: options?.staleTime,
   });
 }
 
@@ -5890,14 +5906,24 @@ export function useRolloutAction(options?: { reportErrors?: boolean }) {
       action,
       namespace,
       name,
+      gate,
     }: {
       action: RolloutAction;
       namespace: string;
       name: string;
+      // promote only: the pause it was confirmed for; the server refuses with
+      // 409 once the Rollout no longer waits there. An older Radar ignores it.
+      gate?: string;
     }) => {
       const response = await apiFetch(
         `${getApiBase()}/rollouts/${namespace}/${name}/${action}`,
-        { method: "POST" },
+        action === "promote" && gate
+          ? {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ gate }),
+            }
+          : { method: "POST" },
       );
       if (!response.ok) {
         const error = await readErrorBody(response);
@@ -6317,7 +6343,17 @@ function helmNamespaceParams(namespaces: string[] = []) {
 // repeating a full object read every few seconds.
 const HELM_INVENTORY_FAST_POLLS = 24;
 
-export function helmInventoryRefetchInterval(inventory: Pick<HelmInventory, "objectCoverage"> | undefined, updates: number): number | false {
+// The list doesn't otherwise poll, so a release whose operation ended would
+// keep ticking toward "Stuck" on the last read. While one is in flight the list
+// polls, as the Applications page does, and stops once nothing moves.
+const HELM_IN_FLIGHT_POLL_MS = 5000;
+
+export function helmInventoryRefetchInterval(
+  inventory: (Pick<HelmInventory, "objectCoverage"> & Partial<Pick<HelmInventory, "releases">>) | undefined,
+  updates: number,
+  now = Date.now(),
+): number | false {
+  if (inventory?.releases?.some((release) => helmReleaseActivity(release, now).moving)) return HELM_IN_FLIGHT_POLL_MS;
   const settling = inventory?.objectCoverage?.gaps.some((gap) => gap.action === "retry" || gap.action === "wait");
   if (!settling) return false;
   return updates < HELM_INVENTORY_FAST_POLLS ? 5000 : 60000;

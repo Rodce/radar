@@ -153,6 +153,8 @@ type fluxCondition struct {
 	typ                     string
 	status                  string
 	reason                  string
+	message                 string
+	lastTransitionTime      string
 	observedGeneration      int64
 	observedGenerationKnown bool
 }
@@ -169,9 +171,11 @@ func fluxConditions(root *unstructured.Unstructured) []fluxCondition {
 			continue
 		}
 		c := fluxCondition{
-			typ:    StringValue(m["type"]),
-			status: StringValue(m["status"]),
-			reason: StringValue(m["reason"]),
+			typ:                StringValue(m["type"]),
+			status:             StringValue(m["status"]),
+			reason:             StringValue(m["reason"]),
+			message:            StringValue(m["message"]),
+			lastTransitionTime: StringValue(m["lastTransitionTime"]),
 		}
 		switch g := m["observedGeneration"].(type) {
 		case int64:

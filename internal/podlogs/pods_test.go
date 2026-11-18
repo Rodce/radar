@@ -5,6 +5,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestBuildPodInfoMarksNativeSidecars(t *testing.T) {
@@ -74,6 +75,50 @@ func TestBuildPodInfoReportsContainerStates(t *testing.T) {
 	got = BuildPodInfo(pod, time.Now()).ContainerStatuses
 	if got[0].State != "terminated" || got[0].Reason != "Completed" || got[1].State != "running" || !got[1].Started {
 		t.Fatalf("initialized statuses=%+v", got)
+	}
+}
+
+func TestBuildPodInfoMarksStartingPods(t *testing.T) {
+	now := time.Now()
+	started := metav1.NewTime(now.Add(-20 * time.Second))
+	pod := &corev1.Pod{
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app", StartupProbe: &corev1.Probe{PeriodSeconds: 10, FailureThreshold: 30}}}},
+		Status: corev1.PodStatus{
+			Phase:             corev1.PodRunning,
+			StartTime:         &started,
+			ContainerStatuses: []corev1.ContainerStatus{{Name: "app", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: started}}}},
+		},
+	}
+	if info := BuildPodInfo(pod, now); !info.Starting || info.Ready {
+		t.Fatalf("pod inside its startup probe budget = %+v, want starting", info)
+	}
+	pod.Status.ContainerStatuses[0].Ready = true
+	if info := BuildPodInfo(pod, now); info.Starting || !info.Ready {
+		t.Fatalf("ready pod = %+v, want ready and not starting", info)
+	}
+}
+
+// The workload page reads the revision verdict off each Pod rather than
+// deciding it again: a crash-looping Pod that passes its probes between
+// restarts fails its revision, and a Pod being deleted does not.
+func TestBuildPodInfoCarriesTheRevisionVerdict(t *testing.T) {
+	now := time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC)
+	restarted := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "web-3", CreationTimestamp: metav1.Time{Time: now.Add(-10 * time.Minute)}},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning,
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+			ContainerStatuses: []corev1.ContainerStatus{{Name: "web", Ready: true, RestartCount: 5,
+				State:                corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.Time{Time: now.Add(-5 * time.Second)}}},
+				LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error", FinishedAt: metav1.Time{Time: now.Add(-15 * time.Second)}}},
+			}}},
+	}
+	if info := BuildPodInfo(restarted, now); !info.RevisionFailing || info.HealthLevel == "unhealthy" {
+		t.Fatalf("crash-looping Pod between crashes = %+v, want revisionFailing without an unhealthy level", info)
+	}
+	deleting := restarted.DeepCopy()
+	deleting.DeletionTimestamp = &metav1.Time{Time: now.Add(-time.Second)}
+	if info := BuildPodInfo(deleting, now); info.RevisionFailing {
+		t.Fatalf("Pod being deleted = %+v, want no revision verdict", info)
 	}
 }
 

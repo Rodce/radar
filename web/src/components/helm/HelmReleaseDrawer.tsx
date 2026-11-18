@@ -18,9 +18,10 @@ import { HelmReleaseNotes } from './HelmReleaseNotes'
 import type { SelectedHelmRelease, HelmHook, ChartDependency, HelmOperation, HelmOperationInsight, HelmOwnedResource, HookDiagnostic, HookLogEvidence, UpgradeInfo, ValuesPreviewResponse, SourceUpgradeSelection } from '../../types'
 import { apiVersionToGroup, kindToPluralWithGroup, type NavigateToResource } from '../../utils/navigation'
 import { formatDate } from './helm-utils'
-import { getHelmStatusColor, getKindBadgeColor, getResourceStatusColor, SEVERITY_BADGE, SEVERITY_TEXT } from '../../utils/badge-colors'
+import { getKindBadgeColor, getResourceStatusColor, SEVERITY_BADGE, SEVERITY_TEXT } from '../../utils/badge-colors'
 import { useCanHelmAct } from '../../api/client'
 import { RevisionHistory } from './RevisionHistory'
+import { HelmReleaseStatusBadge } from './HelmReleaseStatusBadge'
 import { ManifestViewer } from './ManifestViewer'
 import { ValuesViewer } from './ValuesViewer'
 import { OwnedResources } from './OwnedResources'
@@ -573,11 +574,7 @@ function FullHelmRelease({ release, onClose, onNavigateToResource }: Pick<HelmRe
             <span className={clsx('badge', SEVERITY_BADGE.info)}>
               Helm Release
             </span>
-            {releaseDetail && (
-              <span className={clsx('badge', getHelmStatusColor(releaseDetail.status))}>
-                {releaseDetail.status}
-              </span>
-            )}
+            {releaseDetail && <HelmReleaseStatusBadge release={releaseDetail} />}
             {/* Upgrade indicator */}
             {upgradeLoading ? (
               <span className="badge bg-theme-hover/50 text-theme-text-secondary animate-pulse">

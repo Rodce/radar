@@ -1922,6 +1922,10 @@ export interface WorkloadPodInfo {
   name: string
   containers: string[]
   ready: boolean
+  /** Not ready only because it is still coming up, inside its probes' startup budget (pkg/health IsPodStarting). Absent from older Radars. */
+  starting?: boolean
+  /** Shows, on a Pod of the updated revision, that the revision cannot run (pkg/health RevisionPodFailing): unhealthy or crash-looping between restarts, and neither ended nor being deleted. Absent from older Radars. */
+  revisionFailing?: boolean
   phase?: string
   nodeName?: string
   healthLevel?: HealthStatus

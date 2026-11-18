@@ -1605,6 +1605,30 @@ func (c *ResourceCache) ListDynamicWithGroup(ctx context.Context, kind string, n
 	return dynamicCache.List(gvr, namespace)
 }
 
+// ListDynamicWithGroupReadOnly is ListDynamicWithGroup without the per-object
+// copy for kinds the dynamic informers hold: it returns the cached objects
+// themselves (DynamicResourceCache.ListReadOnly). Callers must not mutate them
+// or keep them past the synchronous computation that asked. Typed kinds and
+// kinds read straight from the API server come back as ListDynamicWithGroup
+// returns them.
+func (c *ResourceCache) ListDynamicWithGroupReadOnly(ctx context.Context, kind string, namespace string, group string) ([]*unstructured.Unstructured, error) {
+	if _, ok := typedRouteGVR(kind, group); ok {
+		return c.ListDynamicWithGroup(ctx, kind, namespace, group)
+	}
+	gvr, err := resolveDynamicGVR(kind, group)
+	if err != nil {
+		return nil, err
+	}
+	dynamicCache := GetDynamicResourceCache()
+	if dynamicCache == nil {
+		return nil, fmt.Errorf("%w: dynamic cache", ErrDynamicNotReady)
+	}
+	if ShouldBypassDynamicInformer(gvr) {
+		return dynamicCache.ListDirect(ctx, gvr, namespace)
+	}
+	return dynamicCache.ListReadOnlyContext(ctx, gvr, namespace)
+}
+
 // ListDirectSelectedWithGroup lists one bounded, label-selected page of a
 // dynamic kind straight from the API server, never through an informer. It
 // resolves the GVR the same way ListDynamicWithGroup does.

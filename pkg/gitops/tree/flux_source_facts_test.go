@@ -111,4 +111,14 @@ func TestHelmReleaseRevisionIsTheInstalledChart(t *testing.T) {
 	if node.Data["revision"] != "6.15.0" || node.Data["attemptedRevision"] != "6.16.0" {
 		t.Fatalf("failed upgrade: revision = %v attempted = %v", node.Data["revision"], node.Data["attemptedRevision"])
 	}
+	// A version with build metadata is longer than a short revision; the
+	// attempt that installed it must still equal it.
+	obj.Object["status"] = map[string]any{
+		"lastAttemptedRevision": "1.4.2+0f3c9a1b7e",
+		"history":               []any{map[string]any{"version": int64(4), "chartVersion": "1.4.2+0f3c9a1b7e", "status": "deployed"}},
+	}
+	node = enrichNodeFromObject(Node{Tool: ToolFluxCD}, obj)
+	if node.Data["revision"] != node.Data["attemptedRevision"] {
+		t.Fatalf("long version: revision = %v attempted = %v", node.Data["revision"], node.Data["attemptedRevision"])
+	}
 }

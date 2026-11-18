@@ -660,6 +660,10 @@ function ViewButton({
   )
 }
 
+// Shared with the Applications page's GitOps source controls, so the same
+// action reads and behaves the same on both pages.
+export { ActionButton as GitOpsActionButton }
+
 function ActionButton({
   label,
   description,

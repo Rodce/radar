@@ -202,6 +202,13 @@
           "labels": null,
           "namespace": "shop",
           "readyReplicas": 1,
+          "rollout": {
+            "active": true,
+            "detail": "0/1 updated · 1 available",
+            "label": "Waiting for new revision",
+            "manual": false,
+            "phase": "waiting"
+          },
           "statusIssue": "",
           "statusSummary": "",
           "strategy": "",
@@ -219,6 +226,13 @@
           "labels": null,
           "namespace": "shop",
           "readyReplicas": 7,
+          "rollout": {
+            "active": true,
+            "detail": "0/7 updated · 7 available",
+            "label": "Waiting for new revision",
+            "manual": false,
+            "phase": "waiting"
+          },
           "statusIssue": "",
           "statusSummary": "",
           "strategy": "",
@@ -239,6 +253,13 @@
           },
           "namespace": "shop",
           "readyReplicas": 1,
+          "rollout": {
+            "active": true,
+            "detail": "0/1 updated · 1 available",
+            "label": "Waiting for new revision",
+            "manual": false,
+            "phase": "waiting"
+          },
           "statusIssue": "",
           "statusSummary": "",
           "strategy": "",
@@ -256,6 +277,13 @@
           "labels": null,
           "namespace": "shop",
           "readyReplicas": 1,
+          "rollout": {
+            "active": true,
+            "detail": "0/1 updated · 1 available",
+            "label": "Waiting for new revision",
+            "manual": false,
+            "phase": "waiting"
+          },
           "statusIssue": "",
           "statusSummary": "",
           "strategy": "",
@@ -275,6 +303,13 @@
           },
           "namespace": "shop",
           "readyReplicas": 1,
+          "rollout": {
+            "active": true,
+            "detail": "0/1 updated · 1 available",
+            "label": "Waiting for new revision",
+            "manual": false,
+            "phase": "waiting"
+          },
           "statusIssue": "",
           "statusSummary": "",
           "strategy": "",
@@ -295,6 +330,13 @@
           },
           "namespace": "shop",
           "readyReplicas": 1,
+          "rollout": {
+            "active": true,
+            "detail": "0/1 updated · 1 available",
+            "label": "Waiting for new revision",
+            "manual": false,
+            "phase": "waiting"
+          },
           "statusIssue": "",
           "statusSummary": "",
           "strategy": "",
@@ -314,6 +356,13 @@
           },
           "namespace": "shop",
           "readyReplicas": 1,
+          "rollout": {
+            "active": true,
+            "detail": "0/1 updated · 1 available",
+            "label": "Waiting for new revision",
+            "manual": false,
+            "phase": "waiting"
+          },
           "statusIssue": "",
           "statusSummary": "",
           "strategy": "",
@@ -334,6 +383,13 @@
           },
           "namespace": "shop",
           "readyReplicas": 2,
+          "rollout": {
+            "active": true,
+            "detail": "0/2 updated · 2 available",
+            "label": "Waiting for new revision",
+            "manual": false,
+            "phase": "waiting"
+          },
           "statusIssue": "",
           "statusSummary": "",
           "strategy": "",
@@ -1247,6 +1303,13 @@
           },
           "namespace": "shop",
           "readyReplicas": 0,
+          "rollout": {
+            "active": true,
+            "detail": "0/1 target Pods updated · 0/1 ready",
+            "label": "Waiting for new revision",
+            "manual": false,
+            "phase": "waiting"
+          },
           "statusIssue": "",
           "statusSummary": "",
           "totalReplicas": 1
@@ -1263,6 +1326,13 @@
           "labels": null,
           "namespace": "team",
           "readyReplicas": 0,
+          "rollout": {
+            "active": true,
+            "detail": "0/1 target Pods updated · 0/1 ready",
+            "label": "Waiting for new revision",
+            "manual": false,
+            "phase": "waiting"
+          },
           "statusIssue": "",
           "statusSummary": "",
           "totalReplicas": 1
@@ -3353,6 +3423,13 @@
               },
               "namespace": "shop",
               "readyReplicas": 2,
+              "rollout": {
+                "active": true,
+                "detail": "0/2 updated · 2 available",
+                "label": "Waiting for new revision",
+                "manual": false,
+                "phase": "waiting"
+              },
               "statusIssue": "",
               "statusSummary": "",
               "strategy": "",
@@ -3553,6 +3630,13 @@
               },
               "namespace": "shop",
               "readyReplicas": 2,
+              "rollout": {
+                "active": true,
+                "detail": "0/2 updated · 2 available",
+                "label": "Waiting for new revision",
+                "manual": false,
+                "phase": "waiting"
+              },
               "statusIssue": "",
               "statusSummary": "",
               "strategy": "",
@@ -3785,6 +3869,13 @@
               },
               "namespace": "shop",
               "readyReplicas": 2,
+              "rollout": {
+                "active": true,
+                "detail": "0/2 updated · 2 available",
+                "label": "Waiting for new revision",
+                "manual": false,
+                "phase": "waiting"
+              },
               "statusIssue": "",
               "statusSummary": "",
               "strategy": "",
@@ -3859,6 +3950,13 @@
               },
               "namespace": "shop",
               "readyReplicas": 2,
+              "rollout": {
+                "active": true,
+                "detail": "0/2 updated · 2 available",
+                "label": "Waiting for new revision",
+                "manual": false,
+                "phase": "waiting"
+              },
               "statusIssue": "",
               "statusSummary": "",
               "strategy": "",
@@ -3953,6 +4051,13 @@
               },
               "namespace": "shop",
               "readyReplicas": 2,
+              "rollout": {
+                "active": true,
+                "detail": "0/2 updated · 2 available",
+                "label": "Waiting for new revision",
+                "manual": false,
+                "phase": "waiting"
+              },
               "statusIssue": "",
               "statusSummary": "",
               "strategy": "",
@@ -4194,6 +4299,13 @@
               },
               "namespace": "shop",
               "readyReplicas": 2,
+              "rollout": {
+                "active": true,
+                "detail": "0/2 updated · 2 available",
+                "label": "Waiting for new revision",
+                "manual": false,
+                "phase": "waiting"
+              },
               "statusIssue": "",
               "statusSummary": "",
               "strategy": "",
@@ -4234,6 +4346,13 @@
               },
               "namespace": "shop",
               "readyReplicas": 1,
+              "rollout": {
+                "active": true,
+                "detail": "0/1 updated · 1 available",
+                "label": "Waiting for new revision",
+                "manual": false,
+                "phase": "waiting"
+              },
               "statusIssue": "",
               "statusSummary": "",
               "strategy": "",
@@ -4310,6 +4429,13 @@
               },
               "namespace": "shop",
               "readyReplicas": 1,
+              "rollout": {
+                "active": true,
+                "detail": "0/1 updated · 1 available",
+                "label": "Waiting for new revision",
+                "manual": false,
+                "phase": "waiting"
+              },
               "statusIssue": "",
               "statusSummary": "",
               "strategy": "",
@@ -4434,6 +4560,13 @@
               },
               "namespace": "shop",
               "readyReplicas": 1,
+              "rollout": {
+                "active": true,
+                "detail": "0/1 updated · 1 available",
+                "label": "Waiting for new revision",
+                "manual": false,
+                "phase": "waiting"
+              },
               "statusIssue": "",
               "statusSummary": "",
               "strategy": "",
@@ -4489,6 +4622,13 @@
               },
               "namespace": "shop",
               "readyReplicas": 2,
+              "rollout": {
+                "active": true,
+                "detail": "0/2 updated · 2 available",
+                "label": "Waiting for new revision",
+                "manual": false,
+                "phase": "waiting"
+              },
               "statusIssue": "",
               "statusSummary": "",
               "strategy": "",
@@ -4575,6 +4715,13 @@
               },
               "namespace": "shop",
               "readyReplicas": 2,
+              "rollout": {
+                "active": true,
+                "detail": "0/2 updated · 2 available",
+                "label": "Waiting for new revision",
+                "manual": false,
+                "phase": "waiting"
+              },
               "statusIssue": "",
               "statusSummary": "",
               "strategy": "",
@@ -4760,6 +4907,13 @@
               },
               "namespace": "shop",
               "readyReplicas": 2,
+              "rollout": {
+                "active": true,
+                "detail": "0/2 updated · 2 available",
+                "label": "Waiting for new revision",
+                "manual": false,
+                "phase": "waiting"
+              },
               "statusIssue": "",
               "statusSummary": "",
               "strategy": "",

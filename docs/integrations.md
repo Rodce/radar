@@ -82,7 +82,12 @@ not used as a failure-onset column.
 Canary details distinguish recorded rollout phase from a requested suspension.
 The recorded phase stays visible while suspension is requested. Normal analysis,
 confirmation waits and promotion are neutral states; a failed last
-rollout remains visible even when suspension is requested. Flagger does not publish
+rollout remains visible even when suspension is requested. In a GitOps tree, a
+Canary that Flagger is moving (Initializing, Progressing, Promoting, Finalising)
+spins while Flagger keeps reporting on it, for at most ten minutes after its last
+report, and one parked on a confirmation hook (Waiting, WaitingPromotion) is
+marked as waiting for action. There is no Promote for it: the hook belongs to
+whoever runs it. Flagger does not publish
 an observed generation, so its recorded phase is not proof that the latest spec
 has been reconciled. `Promoted=False` alone is not treated as a failure.
 
@@ -852,7 +857,7 @@ permits the reference or has produced an artifact.
 
 ### What Radar Shows
 
-**Control surface:** Set image updates one or more regular or init-container images on the Rollout's pod template or supported `workloadRef` target. Radar reads the current images before editing, rejects stale changes instead of overwriting them, and lets the Rollout controller start the resulting canary or blue-green rollout. A paused Rollout saves the template change but does not start rolling out until it is resumed. Promote, Promote full, Skip step, Retry, and Abort are also available on the Rollout detail page, each gated on a live capability probe (`patch rollouts` and `patch rollouts/status` are separate grants). Rollback goes through revision history, with an opt-in "skip canary steps" follow-up for hotfixes.
+**Control surface:** Set image updates one or more regular or init-container images on the Rollout's pod template or supported `workloadRef` target. Radar reads the current images before editing, rejects stale changes instead of overwriting them, and lets the Rollout controller start the resulting canary or blue-green rollout. A paused Rollout saves the template change but does not start rolling out until it is resumed. Promote, Promote full, Skip step, Retry, and Abort are also available on the Rollout detail page, each gated on a live capability probe (`patch rollouts` and `patch rollouts/status` are separate grants). A Rollout parked at a promotion gate (a canary pause step without a duration, or a blue-green cut-over with auto-promotion off) is marked as waiting for action in the GitOps tree, the topology graph and Applications, and its node in the tree and its row in Applications carry a Promote button: the same call and capability probe, behind a confirmation. Those surfaces read through snapshots seconds old, and a promote on a Rollout that has moved on skips the step it is on (an analysis included) or clears a later pause nobody was shown. So the button names the pause it was shown (the step or blue-green revision, and when the pause began): on confirm Radar reads the Rollout again and sends nothing if it waits elsewhere, and `POST /api/rollouts/{ns}/{name}/promote` with `{"gate": ...}` checks that pause on the live object and writes with its resourceVersion, answering 409 if the Rollout moved on before or during the write. Without a body (the Rollout's own page, which shows the live pause) the promote is unchanged. An inconclusive analysis or experiment is marked too, without a button: promote or abort is decided on the Rollout's page. Rollback goes through revision history, with an opt-in "skip canary steps" follow-up for hotfixes.
 
 **Rollout visibility:** Radar keeps serving readiness separate from transient rollout activity. Resource tables, drawers, full workload views, and Applications show the active step, progress, pause, or failure without marking capacity served by the stable revision as unavailable.
 

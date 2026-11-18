@@ -55,6 +55,10 @@ import { useTimelineSource } from "../../context/TimelineSource";
 import { apiVersionToGroup, kindToPluralWithGroup, relatedResourcePath, withCrossViewParams } from "../../utils/navigation";
 import { WorkloadView } from "../workload/WorkloadView";
 import { ApplicationCostTab } from "../cost/ApplicationCostTab";
+import { AppSourceActions } from "./AppSourceActions";
+import { RolloutPromoteButton, RolloutPromoteProvider } from "../workload/RolloutPromote";
+import { awaitsPromotion } from "@skyhook-io/k8s-ui/utils/awaiting-action";
+import { isArgoRolloutRef } from "@skyhook-io/k8s-ui/utils/workload-rollout";
 import { useTimelineRetentionNote } from "../../context/TimelineCustomization";
 import { isOpenCostWorkloadKind } from "../cost/kinds";
 
@@ -202,13 +206,25 @@ export function ApplicationsView({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <ApplicationsList
-        apps={apps}
-        onSelect={selectApp}
-        headerActions={freshness}
-      />
+      <RolloutPromoteProvider>
+        <ApplicationsList
+          apps={apps}
+          onSelect={selectApp}
+          headerActions={freshness}
+          renderAwaitingAction={renderAwaitingAction}
+        />
+      </RolloutPromoteProvider>
     </div>
   );
+}
+
+// What Radar can do from the list for a workload whose rollout waits on a
+// person: promote an Argo Rollout parked at a promotion gate. An inconclusive
+// analysis is a choice between promote and abort, made on the Rollout's own
+// page beside the analysis, so its row only says so.
+function renderAwaitingAction(workload: AppWorkload) {
+  if (!isArgoRolloutRef(workload) || !awaitsPromotion(workload.rollout?.label)) return null;
+  return <RolloutPromoteButton namespace={workload.namespace} name={workload.name} waitingFor={workload.rollout?.detail} gate={workload.rollout?.gate} />;
 }
 
 // AppDetailRoute wires the OSS data hooks the shared ApplicationDetail can't:
@@ -668,6 +684,7 @@ function AppDetailRoute({
         onHistoryRangeChange={setRetainedHistoryRange}
         onOpenTimeline={openApplicationTimeline}
         onOpenSource={openSource}
+        renderSourceActions={(row) => <AppSourceActions app={row} onOpenSource={openSource} />}
         selectedWorkloadKey={selectedWorkloadKey}
         onSelectWorkload={selectWorkload}
         selectedView={selectedView}

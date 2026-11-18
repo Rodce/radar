@@ -11,6 +11,7 @@ export function PodRow({
   namespace,
   ready,
   healthLevel,
+  starting,
   detail,
   onNavigate,
   onOpenLogs,
@@ -20,6 +21,8 @@ export function PodRow({
   namespace: string
   ready: boolean | null
   healthLevel?: WorkloadPodInfo['healthLevel']
+  /** Not ready only because it is still coming up (see workloadPodStarting). */
+  starting?: boolean
   detail: string
   onNavigate?: NavigateToResource
   /** Adds a Logs button beside the row. */
@@ -27,11 +30,11 @@ export function PodRow({
   /** With `onOpenLogs`, shows this reason in place of the Logs button. */
   logsUnavailable?: string
 }) {
-  const statusLabel = podStatusLabel(healthLevel, ready)
-  const statusClass = podStatusClass(healthLevel, ready)
+  const statusLabel = podStatusLabel(healthLevel, ready, starting)
+  const statusClass = podStatusClass(healthLevel, ready, starting)
   const content = (
     <>
-      <span className={clsx('h-2 w-2 shrink-0 rounded-full', podDotClass(healthLevel, ready))} />
+      <span className={clsx('h-2 w-2 shrink-0 rounded-full', podDotClass(healthLevel, ready, starting))} />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-medium text-theme-text-primary">{name}</span>
         <span className="block truncate text-xs text-theme-text-tertiary">{detail}</span>
@@ -154,26 +157,29 @@ export function workloadPodDetail(pod: WorkloadPodInfo): string {
   return parts.join(' · ')
 }
 
-export function podStatusLabel(healthLevel: WorkloadPodInfo['healthLevel'] | undefined, ready: boolean | null): string {
+// A starting pod is not ready yet by design, so it reads Starting in the
+// neutral tone rather than Not ready in amber. A problem verdict still wins.
+export function podStatusLabel(healthLevel: WorkloadPodInfo['healthLevel'] | undefined, ready: boolean | null, starting = false): string {
   if (healthLevel === 'unhealthy') return 'Unhealthy'
   if (healthLevel === 'degraded') return 'Degraded'
+  if (starting) return 'Starting'
   if (healthLevel === 'neutral') return ready ? 'Ready' : 'Neutral'
   if (healthLevel === 'unknown') return 'Unknown'
   return ready === null ? 'Unknown' : ready ? 'Ready' : 'Not ready'
 }
 
-export function podStatusClass(healthLevel: WorkloadPodInfo['healthLevel'] | undefined, ready: boolean | null): string {
+export function podStatusClass(healthLevel: WorkloadPodInfo['healthLevel'] | undefined, ready: boolean | null, starting = false): string {
   if (healthLevel === 'unhealthy') return 'status-unhealthy'
   if (healthLevel === 'degraded') return 'status-degraded'
-  if (healthLevel === 'neutral') return 'status-neutral'
+  if (starting || healthLevel === 'neutral') return 'status-neutral'
   if (healthLevel === 'unknown' || ready === null) return 'status-unknown'
   return ready ? 'status-healthy' : 'status-degraded'
 }
 
-export function podDotClass(healthLevel: WorkloadPodInfo['healthLevel'] | undefined, ready: boolean | null): string {
+export function podDotClass(healthLevel: WorkloadPodInfo['healthLevel'] | undefined, ready: boolean | null, starting = false): string {
   if (healthLevel === 'unhealthy') return 'bg-red-500'
   if (healthLevel === 'degraded') return 'bg-amber-500'
-  if (healthLevel === 'neutral') return 'bg-skyhook-500'
+  if (starting || healthLevel === 'neutral') return 'bg-skyhook-500'
   if (healthLevel === 'unknown' || ready === null) return 'bg-theme-text-tertiary'
   return ready ? 'bg-emerald-500' : 'bg-amber-500'
 }

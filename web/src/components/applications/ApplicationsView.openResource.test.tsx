@@ -17,6 +17,13 @@ vi.mock('../../api/client', () => ({
   useHelmRelease: () => idle,
   useIssues: () => idle,
   useTopology: () => idle,
+  useFluxReconcile: () => ({ mutate: () => {}, isPending: false }),
+  useFluxSyncWithSource: () => ({ mutate: () => {}, isPending: false }),
+  useFluxSuspend: () => ({ mutate: () => {}, isPending: false }),
+  useFluxResume: () => ({ mutate: () => {}, isPending: false }),
+  useArgoRefresh: () => ({ mutate: () => {}, isPending: false }),
+  useRolloutAction: () => ({ mutate: () => {}, isPending: false }),
+  useRolloutCapabilities: () => idle,
 }))
 vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { state: 'connected', context: 'test' } }) }))
 vi.mock('../../context/TimelineSource', () => ({

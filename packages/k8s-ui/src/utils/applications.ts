@@ -1,7 +1,7 @@
 import { builtinGroupForKind } from './api-resources'
 import type { ResourceRef } from '../types/core'
 import { groupQualifiesLaneId, laneId, laneResourceKey, parseLaneId } from './navigation'
-import { rolloutActivityLevel, type WorkloadRolloutActivity } from './workload-rollout'
+import { isArgoRolloutRef, rolloutActivityLevel, rolloutAwaitsAction, rolloutIsMoving, type WorkloadRolloutActivity } from './workload-rollout'
 
 // Shared model for the Applications surface — host-agnostic. The OSS single-
 // cluster view and (eventually) the Cloud fleet view both build on these types
@@ -39,6 +39,24 @@ export interface AppRolloutSummary {
   detail: string
   details: string[]
   health: AppHealth
+  /** Some rollout in the summary is applying or progressing right now. */
+  moving: boolean
+  /** The Argo Rollouts that will not move until someone promotes them or
+   *  decides on an inconclusive analysis. A workload waiting for its Pods to
+   *  be deleted (OnDelete) is left out: an operator may be doing exactly that. */
+  awaiting: AppWorkload[]
+}
+
+// rolloutSummaryAwaitsAction is whether a summary reads as waiting on a
+// person: something waits, nothing moves, and nothing in it is worse. A row
+// with a stalled rollout beside a waiting one keeps the stall's red.
+export function rolloutSummaryAwaitsAction(summary: AppRolloutSummary | null | undefined): boolean {
+  return Boolean(summary && summary.awaiting.length > 0 && !summary.moving && summary.health !== 'unhealthy')
+}
+
+// workloadAwaitsAction is the same for one workload's rollout.
+export function workloadAwaitsAction(workload: Pick<AppWorkload, 'group' | 'kind' | 'rollout'>): boolean {
+  return rolloutAwaitsAction(workload.rollout) && isArgoRolloutRef(workload)
 }
 
 export function rolloutDisplayHealth(activity: WorkloadRolloutActivity, workloadHealth: string): AppHealth {
@@ -78,7 +96,15 @@ export function rolloutSummaryForApps(apps: AppRow[]): AppRolloutSummary | null 
   })
   const visibleDetails = details.slice(0, 8)
   const detail = `${visibleDetails.join(' · ')}${details.length > visibleDetails.length ? ` · +${details.length - visibleDetails.length} more` : ''}`
-  return { count: entries.length, label, detail, details, health }
+  return {
+    count: entries.length,
+    label,
+    detail,
+    details,
+    health,
+    moving: entries.some((entry) => rolloutIsMoving(entry.rollout)),
+    awaiting: entries.filter((entry) => workloadAwaitsAction(entry.workload)).map((entry) => entry.workload),
+  }
 }
 
 export interface AppBatchSummary {
@@ -139,6 +165,74 @@ export interface AppSourceRef {
 export interface AppSourceStatus {
   sync?: string
   health?: string
+  /** Paused on purpose: Flux spec.suspend, or an Argo CD app Radar suspended. */
+  suspended?: boolean
+  /** A pass (Flux) or sync operation (Argo CD) is running now. */
+  reconciling?: boolean
+  /** A reconcile was requested and the controller hasn't picked it up yet. */
+  reconcileRequested?: boolean
+  /** When the running pass or operation began. */
+  since?: string
+  /** The timeout the controller works against (Flux spec.timeout). */
+  timeout?: string
+  /** The controller's own words while it works or fails. */
+  message?: string
+}
+
+// sourceInFlight is the delivery-side twin of a moving rollout: the app's
+// GitOps controller is working on it, or about to. A pause holds back a
+// requested reconcile but not an operation someone started by hand.
+export function sourceInFlight(status?: AppSourceStatus | null): boolean {
+  return Boolean(status && (status.reconciling || (!status.suspended && status.reconcileRequested)))
+}
+
+const SOURCE_IN_FLIGHT_POLL_MS = 2000
+const ROLLOUT_POLL_MS = 5000
+const SOURCE_LONG_RUNNING_POLL_MS = 10_000
+const SOURCE_FRESH_MS = 5 * 60_000
+
+// applicationsPollInterval is how often the applications list is worth
+// re-reading while something in it moves; undefined when nothing does. A
+// delivery in flight is read live, so it polls fast while it is fresh and
+// backs off once it has run for minutes, or from the start when the source
+// says nothing of when it began (a Flux spec its controller has not picked
+// up, which a dead controller never does). A requested reconcile stays fast:
+// it is the moment after a click, and the backend stops calling it requested
+// after ten minutes. A rollout comes from rows the server caches for ten
+// seconds, so asking for it faster only repeats the answer.
+export function applicationsPollInterval(apps: AppRow[] | undefined, now: number): number | undefined {
+  let rolling = false
+  let longRunning = false
+  for (const app of apps ?? []) {
+    const status = app.sourceStatus
+    if (sourceInFlight(status)) {
+      const since = status?.since
+      if (!status?.reconciling || (since && now - Date.parse(since) <= SOURCE_FRESH_MS)) return SOURCE_IN_FLIGHT_POLL_MS
+      longRunning = true
+    }
+    rolling ||= Boolean(app.workloads?.some((workload) => rolloutIsMoving(workload.rollout)))
+  }
+  return rolling ? ROLLOUT_POLL_MS : longRunning ? SOURCE_LONG_RUNNING_POLL_MS : undefined
+}
+
+// sourceActivityLabel names what the source's controller is doing, in the
+// words its own message uses ("Running 'upgrade' action…" reads Upgrading).
+export function sourceActivityLabel(source: Pick<AppSourceRef, 'tool' | 'kind'>, status: AppSourceStatus): string {
+  if (status.reconciling) {
+    if (source.tool === 'argocd') return 'Syncing'
+    const action = /Running '(\w+)' action/.exec(status.message ?? '')?.[1]
+    switch (action) {
+      case 'install': return 'Installing'
+      case 'upgrade': return 'Upgrading'
+      case 'rollback': return 'Rolling back'
+      case 'uninstall': return 'Uninstalling'
+      case 'test': return 'Testing'
+    }
+    return source.kind === 'Kustomization' ? 'Applying' : 'Reconciling'
+  }
+  if (status.suspended) return 'Suspended'
+  if (status.reconcileRequested) return 'Reconcile requested'
+  return [status.sync, status.health].filter(Boolean).join(' · ')
 }
 
 export interface AppHistorySummary {

@@ -118,14 +118,15 @@ func TestSummarize_ExcludesRootAndGroupFromDegraded(t *testing.T) {
 
 // TestHealthToTopology pins the buckets the GitOps tree UI keys off. Its
 // "likely cause" tooltip shows only on 'unhealthy', so Degraded and Missing
-// must land there and Progressing and Suspended must not.
+// must land there and Progressing and Suspended must not. Suspended is a
+// pause, not a rollout, so it takes the neutral tone.
 func TestHealthToTopology(t *testing.T) {
 	cases := map[string]string{
 		"Healthy":     "healthy",
 		"Degraded":    "unhealthy",
 		"Missing":     "unhealthy",
 		"Progressing": "degraded",
-		"Suspended":   "degraded",
+		"Suspended":   "neutral",
 		"Unknown":     "unknown",
 		"":            "unknown",
 	}

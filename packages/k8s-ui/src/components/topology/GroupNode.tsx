@@ -1,6 +1,6 @@
 import { memo } from 'react'
 import { NodeProps, Handle, Position } from '@xyflow/react'
-import { Box, LayoutGrid, Maximize2, Minus, Tag, Workflow } from 'lucide-react'
+import { Box, Hand, LayoutGrid, Loader2, Maximize2, Minus, Tag, Workflow } from 'lucide-react'
 import { healthToSeverity, SEVERITY_DOT } from '../../utils/badge-colors'
 import type { HealthStatus } from '../../types'
 import { Tooltip } from '../ui/Tooltip'
@@ -21,6 +21,10 @@ interface GroupNodeData {
   hideHeader?: boolean
   worstStatus?: HealthStatus
   unhealthyCount?: number
+  // Members with work in flight and members waiting on a person, kept fresh
+  // by the graph as the data changes (no relayout needed).
+  changingCount?: number
+  awaitingCount?: number
   kindCounts?: Record<string, number>
   workloadCards?: WorkloadCard[]
   gridColumns?: number
@@ -37,9 +41,34 @@ export const GroupNode = memo(function GroupNode({
     onSetLevel, onCardClick, onMaximizeNamespace, hideHeader,
     worstStatus, unhealthyCount, kindCounts,
     workloadCards, gridColumns,
+    changingCount, awaitingCount,
   } = data
   const hasProblems = (unhealthyCount ?? 0) > 0
   const statusDotColor = hasProblems && worstStatus ? SEVERITY_DOT[healthToSeverity(worstStatus)] : null
+
+  // What the group holds that is at work or waiting on a person: a collapsed
+  // group would otherwise hide it, and the counts under the graph would point
+  // nowhere. The same spinner and hand the members carry.
+  const activity = (changingCount ?? 0) > 0 || (awaitingCount ?? 0) > 0 ? (
+    <span className="flex shrink-0 items-center gap-1.5">
+      {(changingCount ?? 0) > 0 && (
+        <Tooltip content={`${pluralize(changingCount!, 'resource')} in progress`} position="top">
+          <span className="flex items-center gap-0.5 text-[10px] font-medium text-sky-600 dark:text-sky-400">
+            <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+            {changingCount}
+          </span>
+        </Tooltip>
+      )}
+      {(awaitingCount ?? 0) > 0 && (
+        <Tooltip content={`${pluralize(awaitingCount!, 'resource')} waiting for action`} position="top">
+          <span className="flex items-center gap-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">
+            <Hand className="h-3 w-3" aria-hidden />
+            {awaitingCount}
+          </span>
+        </Tooltip>
+      )}
+    </span>
+  ) : null
 
   const getIcon = () => {
     switch (type) {
@@ -193,6 +222,7 @@ export const GroupNode = memo(function GroupNode({
             {statusDotColor && (
               <span className={`w-2 h-2 rounded-full shrink-0 ${statusDotColor}`} />
             )}
+            {activity}
             <div className="ml-auto shrink-0">{levelControls}</div>
           </div>
           {/* Kind pills row: colored icons with counts */}
@@ -238,6 +268,7 @@ export const GroupNode = memo(function GroupNode({
               <span className="shrink-0 text-xs text-theme-text-secondary bg-theme-surface/50 rounded px-1.5 py-0.5">
                 {workloadCards.length}
               </span>
+              {activity}
             </div>
             <div className="shrink-0 ml-2">{levelControls}</div>
           </div>
@@ -310,6 +341,7 @@ export const GroupNode = memo(function GroupNode({
               <span className="shrink-0 text-xs text-theme-text-secondary bg-theme-surface/50 rounded px-1.5 py-0.5">
                 {nodeCount}
               </span>
+              {activity}
             </div>
             <div className="shrink-0 ml-2">{levelControls}</div>
           </div>

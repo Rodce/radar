@@ -3,10 +3,19 @@ import { Handle, Position } from "@xyflow/react";
 import {
   ChevronDown,
   ChevronUp,
+  Clock3,
+  Hand,
   Layers,
+  Loader2,
+  Pause,
   Radio,
   TriangleAlert,
 } from 'lucide-react'
+import { inProgressUntil, topologyNodeAwaiting, topologyNodeChanging, topologyNodeHold } from './topology-motion'
+import { useDeadlineTick } from '../../hooks/useDeadlineTick'
+import { awaitingNote, rolloutStall } from '../../utils/awaiting-action'
+import { sourceActivityLabel } from '../../utils/applications'
+import { spinnerToneClass } from '../ui/status-tone'
 import { clsx } from 'clsx'
 import type { NodeKind, HealthStatus, PodSummary } from '../../types'
 import { displayKind } from '../../types'
@@ -341,6 +350,15 @@ const STATUS_STYLES: Record<HealthStatus, React.CSSProperties> = {
   unknown: {},
 };
 
+function changeTooltip(data: Record<string, unknown>): string {
+  const rollout = data.rollout as { label?: string; detail?: string } | undefined;
+  if (rollout?.label) return rollout.detail ? `${rollout.label}: ${rollout.detail}` : rollout.label;
+  if (data.starting === true) return "Its Pods are still starting";
+  if (typeof data.inProgressMessage === "string" && data.inProgressMessage) return data.inProgressMessage;
+  if (data.inProgress === "requested") return "Reconcile requested; waiting for the controller to pick it up";
+  return "Change in progress";
+}
+
 function getStatusStyle(status: HealthStatus): React.CSSProperties {
   return STATUS_STYLES[status] || STATUS_STYLES.healthy;
 }
@@ -352,6 +370,18 @@ function getSubtitle(
   kind: NodeKind,
   nodeData: Record<string, unknown>,
 ): string {
+  // A Flux object mid-pass says what its controller is doing, in the words of
+  // its own message ("Upgrading"), not Ready's interim "Unknown".
+  if (typeof nodeData.inProgress === "string" && (kind === "HelmRelease" || kind === "Kustomization" || kind === "GitRepository")) {
+    return sourceActivityLabel(
+      { tool: "fluxcd", kind },
+      {
+        reconciling: nodeData.inProgress === "reconciling",
+        reconcileRequested: nodeData.inProgress === "requested",
+        message: typeof nodeData.inProgressMessage === "string" ? nodeData.inProgressMessage : undefined,
+      },
+    );
+  }
   // An explicit override wins over the per-kind computed subtitle: the Reachability
   // diagram precomputes a functional one-liner (port→targetPort, readiness) the
   // generic per-kind logic can't know. '' is a deliberate "no subtitle", honored as
@@ -633,6 +663,21 @@ export const K8sResourceNode = memo(function K8sResourceNode({
   const canCollapse = isPodGroup && onCollapse && isExpanded
   const statusIssue = nodeData.statusIssue as string | undefined
   const issueTooltip = getIssueTooltip(statusIssue)
+  // A controller's "still working" lapses on its own (inProgressUntil); the
+  // node redraws itself then, since nothing else may for a while.
+  const lapse = inProgressUntil(nodeData)
+  useDeadlineTick(lapse !== undefined && lapse > Date.now() ? lapse : undefined)
+  const changing = topologyNodeChanging(nodeData)
+  // Parked until a person acts (a rollout waiting to be promoted): held
+  // still and amber, the opposite of the spinner that marks a controller at
+  // work.
+  const awaiting = topologyNodeAwaiting(nodeData)
+  // A rollout under way and standing still between two steps, in the workload
+  // page's words, so the node does not read as settled.
+  const hold = topologyNodeHold(nodeData)
+  const HoldIcon = hold?.phase === 'waiting' ? Clock3 : Pause
+  // A rollout that cannot go on says why beside the status that paints it.
+  const stall = rolloutStall(nodeData)
   const policyStatus = nodeData.policyStatus as string | undefined
   const deploymentMembership = nodeData.deploymentMembership as 'runtime-only' | 'source-only' | undefined
   const deploymentSourceLabel = nodeData.deploymentSourceLabel as string | undefined
@@ -693,6 +738,9 @@ export const K8sResourceNode = memo(function K8sResourceNode({
             "topology-node-status-bar",
           status === "healthy" && "topology-node-status-healthy",
           status === "unknown" && "topology-node-status-unknown",
+          // An outline, not a ring: the card's status paint is a box-shadow
+          // set inline, which a ring would lose to.
+          awaiting && !selected && "outline outline-1 -outline-offset-1 outline-amber-500/70",
         )}
         style={{
           width: NODE_DIMENSIONS[kind]?.width ?? DEFAULT_NODE_DIMENSIONS.width,
@@ -836,7 +884,56 @@ export const K8sResourceNode = memo(function K8sResourceNode({
                   />
                 </Tooltip>
               )}
-              {issueTooltip ? (
+              {changing ? (
+                // Change in flight: the dot turns into the spinner every
+                // other surface turns for the same state, in its tone. A node
+                // with a known problem keeps saying what it is: the cause
+                // leads the hover, the activity follows.
+                <Tooltip
+                  content={issueTooltip ? (
+                    <>
+                      {issueTooltip}
+                      <div className="mt-1.5 text-theme-text-tertiary">{changeTooltip(nodeData)}</div>
+                    </>
+                  ) : changeTooltip(nodeData)}
+                  position="right"
+                >
+                  <Loader2
+                    className={clsx("w-3 h-3 shrink-0 animate-spin cursor-help", spinnerToneClass(status))}
+                    aria-label="Change in progress"
+                  />
+                </Tooltip>
+              ) : awaiting ? (
+                <Tooltip
+                  content={issueTooltip ? (
+                    <>
+                      {issueTooltip}
+                      <div className="mt-1.5 text-theme-text-tertiary">{awaitingNote(awaiting)}</div>
+                    </>
+                  ) : awaitingNote(awaiting)}
+                  position="right"
+                >
+                  <Hand
+                    className="w-3 h-3 shrink-0 cursor-help text-amber-600 dark:text-amber-400"
+                    aria-label={awaiting.label}
+                  />
+                </Tooltip>
+              ) : hold ? (
+                <Tooltip
+                  content={issueTooltip ? (
+                    <>
+                      {issueTooltip}
+                      <div className="mt-1.5 text-theme-text-tertiary">{awaitingNote(hold)}</div>
+                    </>
+                  ) : awaitingNote(hold)}
+                  position="right"
+                >
+                  <HoldIcon
+                    className={clsx("w-3 h-3 shrink-0 cursor-help", spinnerToneClass(status))}
+                    aria-label={hold.label}
+                  />
+                </Tooltip>
+              ) : issueTooltip ? (
                 <Tooltip content={issueTooltip} position="right">
                   <span
                     className={clsx(
@@ -863,7 +960,7 @@ export const K8sResourceNode = memo(function K8sResourceNode({
           </div>
 
           {/* Subtitle */}
-          {subtitle && (
+          {(subtitle || awaiting || hold || stall) && (
             portsTooltip ? (
               <Tooltip content={portsTooltip} position="bottom" wrapperClassName="max-w-full mt-0.5">
                 <div className="text-xs text-theme-text-secondary truncate cursor-help">
@@ -873,6 +970,11 @@ export const K8sResourceNode = memo(function K8sResourceNode({
             ) : (
               <div className="text-xs text-theme-text-secondary truncate mt-0.5" title={typeof nodeData.earlierJobRun === 'string' ? `Earlier run of Job ${nodeData.earlierJobRun}` : undefined}>
                 {subtitle}
+                {awaiting && (
+                  <span className="font-medium text-amber-700 dark:text-amber-400">{subtitle ? " • " : ""}{awaiting.label}</span>
+                )}
+                {hold && <span>{subtitle ? " • " : ""}{hold.label}</span>}
+                {stall && <span className="font-medium text-red-600 dark:text-red-400">{subtitle ? " • " : ""}{stall.label}</span>}
               </div>
             )
           )}

@@ -26,7 +26,7 @@ export function GitOpsStatusBadge({ status, showHealth = true, compact = false }
         className={clsx('badge', colorClass)}
         title={status.message}
       >
-        <Icon className="w-3 h-3" />
+        <Icon className={clsx('w-3 h-3', Icon === Loader2 && 'animate-spin')} />
         {label}
       </span>
     )
@@ -42,7 +42,7 @@ export function GitOpsStatusBadge({ status, showHealth = true, compact = false }
         className={clsx('badge', colorClass)}
         title={status.message}
       >
-        <Icon className="w-3.5 h-3.5" />
+        <Icon className={clsx('w-3.5 h-3.5', Icon === Loader2 && 'animate-spin')} />
         {label}
       </span>
       {showHealth && !mainLabelShowsHealth && status.health !== 'Unknown' && status.health !== getHealthFromSync(status.sync) && (
@@ -102,7 +102,7 @@ function HealthIndicator({ health }: HealthIndicatorProps) {
       className={clsx('badge-sm', color)}
       title={`Health: ${label}`}
     >
-      <Icon className="w-3 h-3" />
+      <Icon className={clsx('w-3 h-3', Icon === Loader2 && 'animate-spin')} />
       {label}
     </span>
   )

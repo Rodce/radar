@@ -302,10 +302,10 @@ export function getHelmStatusColor(status: string): string {
  * normal in-flight states during every routine operation. Treating
  * them as "actionable" would briefly attach an alarming chevron +
  * tooltip to every install while it ran — indistinguishable from
- * the genuinely-stuck case (controller crashed mid-flight). Until
- * we have release age available client-side to disambiguate
- * "in-flight" from "stuck > N min", we give up the stuck-detect
- * signpost rather than wrongly alarm the common case.
+ * the genuinely-stuck case (controller crashed mid-flight) by
+ * status alone. Telling them apart takes the release's age:
+ * `helmReleaseActivity` (utils/helm-status) makes that call where
+ * the age is known, and its stuck badge carries its own signpost.
  *
  * @see https://github.com/helm/helm/blob/dev-v3/pkg/release/status.go
  */

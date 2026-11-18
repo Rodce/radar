@@ -54,6 +54,9 @@ var (
 	ErrNoSteps                = errors.New("rollout has no canary steps")
 	ErrAlreadyAtLastStep      = errors.New("rollout is already at its last step")
 	ErrResourceTerminating    = errors.New("rollout is pending deletion")
+	// ErrPauseChanged means a promote named the pause it was confirmed for
+	// (PromoteAt) and the Rollout no longer waits there.
+	ErrPauseChanged = errors.New("the Rollout no longer waits at the pause this promote was confirmed for")
 
 	// ErrControllerNotCaughtUp means the Argo Rollouts controller has not reconciled the
 	// change yet: a lagging dependency, not a bad request.

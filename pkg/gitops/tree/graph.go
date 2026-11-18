@@ -31,6 +31,21 @@ func nodeFromTopology(n topology.Node, ref ResourceRef, role NodeRole, tool Tool
 	info := infoFromTopology(n)
 	if health == "" {
 		health = healthFromTopology(n.Status)
+		// A workload short of ready replicas only because its Pods are still
+		// starting (topology's "starting") is in progress, the word a GitOps
+		// controller has for it. So is a generated custom resource whose
+		// controller says it is still working (topology's "inProgress"):
+		// topology is the only reading such a node gets. A declared one is
+		// read from its live object instead (recordConditionProgress), which
+		// can be a few seconds ahead of topology. A healthy node that is also
+		// busy (a certificate being renewed) stays Healthy.
+		// "requested" is a reconcile asked for and not yet picked up: no one
+		// is working yet, and a failed object stays failed until someone is.
+		starting, _ := n.Data["starting"].(bool)
+		working := n.Data["inProgress"] == "reconciling"
+		if starting || (working && role == RoleGenerated && health != "Healthy") {
+			health = "Progressing"
+		}
 		source = HealthSourceRadar
 	}
 	status := string(n.Status)
@@ -147,6 +162,12 @@ func enrichNodeFromObject(node Node, obj *unstructured.Unstructured) Node {
 	// lastAttemptedRevision; a newer failed attempt must still show as attempted.
 	if release := gitops.FluxDeployedRelease(obj); release != nil && release.ChartVersion != "" {
 		node.Data["revision"] = release.ChartVersion
+		// The installed version is kept whole, so the attempt must be too: cut
+		// to 12 characters, a version with build metadata (1.4.2+0f3c9a1b7e)
+		// never equals itself and every healthy release reads as stuck.
+		if attempted, _, _ := unstructured.NestedString(obj.Object, "status", "lastAttemptedRevision"); attempted != "" {
+			node.Data["attemptedRevision"] = attempted
+		}
 	}
 	if ts, ok, _ := unstructured.NestedString(obj.Object, "status", "reconciledAt"); ok && ts != "" && gitops.ToolOf(obj) == gitops.ToolArgoCD && obj.GetKind() == "Application" {
 		if parsed, err := time.Parse(time.RFC3339Nano, ts); err == nil && !parsed.IsZero() {
@@ -155,8 +176,108 @@ func enrichNodeFromObject(node Node, obj *unstructured.Unstructured) Node {
 	}
 	if strings.HasSuffix(apiGroup(obj), ".toolkit.fluxcd.io") {
 		recordFluxReady(node, obj)
+		recordFluxActivity(node, obj)
 	}
-	return enrichFluxSource(node, obj)
+	if gitops.ArgoOperationInProgress(obj) {
+		node.Data["operationInProgress"] = true
+		// What Argo is doing and since when: "waiting for healthy state of
+		// apps/Deployment/web" is the line that says why a sync takes long.
+		if message, _, _ := unstructured.NestedString(obj.Object, "status", "operationState", "message"); message != "" {
+			node.Data["operationMessage"] = message
+		}
+		if started, _, _ := unstructured.NestedString(obj.Object, "status", "operationState", "startedAt"); started != "" {
+			node.Data["operationStartedAt"] = started
+		}
+	}
+	return enrichFluxSource(enrichFluxReconciler(recordConditionProgress(node, obj), obj), obj)
+}
+
+// recordConditionProgress marks a custom resource whose controller is at work,
+// or parked until a person acts, read from the live object with the rule
+// topology uses (topology.AnnotateResourceProgress): a Certificate being
+// issued, a Crossplane resource being created, a Flagger Canary moving or
+// waiting on its confirmation hook. Kinds with a reading of their own are left
+// to it: built-ins, Flux objects and Argo's kinds. A copy of the same reading
+// that came with the node from topology is replaced, since the live object can
+// be a few seconds ahead of it.
+//
+// A node whose health is Radar's own non-Healthy read becomes Progressing
+// while its controller works: a first issuance reads Degraded otherwise. A
+// controller's verdict stands, and a node with no health keeps none (the
+// destination-side managed tree sets none on purpose).
+func recordConditionProgress(node Node, obj *unstructured.Unstructured) Node {
+	group := apiGroup(obj)
+	if strings.HasSuffix(group, ".toolkit.fluxcd.io") {
+		// A Flux object's activity is read from the object itself
+		// (recordFluxActivity).
+		clearConditionProgress(node.Data)
+		return node
+	}
+	if !strings.Contains(group, ".") || strings.HasSuffix(group, ".k8s.io") || group == "argoproj.io" {
+		return node
+	}
+	clearConditionProgress(node.Data)
+	topology.AnnotateResourceProgress(node.Data, obj, time.Now())
+	if node.Data["inProgress"] == "reconciling" && node.HealthSource == HealthSourceRadar && node.Health != "" && node.Health != "Healthy" {
+		node.Health = "Progressing"
+		node.TopologyStatus = healthToTopology(node.Health)
+	}
+	return node
+}
+
+func clearConditionProgress(data map[string]any) {
+	for _, key := range []string{"inProgress", "inProgressSince", "inProgressUntil", "inProgressMessage", "awaiting"} {
+		delete(data, key)
+	}
+}
+
+// enrichFluxReconciler gives a Kustomization or HelmRelease inside another
+// Flux object's tree the verdict its own page shows. A Flux inventory carries
+// references only, so without this the node falls back to Radar's topology
+// read of Ready alone, which can't see spec.suspend or a pass in flight: a
+// suspended release reads Healthy and one mid-upgrade reads Unknown.
+func enrichFluxReconciler(node Node, obj *unstructured.Unstructured) Node {
+	if node.Tool != ToolFluxCD || node.Role == RoleRoot {
+		return node
+	}
+	switch apiGroup(obj) + "/" + obj.GetKind() {
+	case "kustomize.toolkit.fluxcd.io/Kustomization", "helm.toolkit.fluxcd.io/HelmRelease":
+	default:
+		return node
+	}
+	state := gitops.FluxStatus(obj)
+	node.Sync, node.Health = state.Sync, state.Health
+	node.HealthSource = healthSourceFor(state.Health, HealthSourceController)
+	node.HealthReason, node.HealthMessage, node.HealthSeverity = "", "", ""
+	node.TopologyStatus = healthToTopology(state.Health)
+	return node
+}
+
+// recordFluxActivity marks a Flux object its controller is at work on, for the
+// in-flight affordance the fleet row gives the same state: a pass running
+// (gitops.FluxInFlight, so never a failure that merely keeps retrying), since
+// when and against what timeout, or a reconcile someone requested that the
+// controller has not picked up yet. Activity, not sync or health, and emitted
+// only when there is some.
+func recordFluxActivity(node Node, obj *unstructured.Unstructured) {
+	state := gitops.FluxStatus(obj)
+	if state.Health == "Suspended" {
+		return
+	}
+	activity := gitops.FluxActivity(obj)
+	inFlight := gitops.FluxInFlight(state)
+	if inFlight {
+		node.Data["reconciling"] = true
+		if activity.Since != "" {
+			node.Data["reconcilingSince"] = activity.Since
+		}
+	}
+	if activity.Requested {
+		node.Data["reconcileRequested"] = true
+	}
+	if (inFlight || activity.Requested) && activity.Timeout != "" {
+		node.Data["timeout"] = activity.Timeout
+	}
 }
 
 // recordFluxReady keeps a Flux object's own Ready verdict on its node, so a
@@ -249,7 +370,7 @@ func apiGroup(obj *unstructured.Unstructured) string {
 }
 
 // HealthToTopology maps a controller health vocabulary value to the graph's
-// tone (healthy / degraded / unhealthy / unknown).
+// tone (healthy / degraded / unhealthy / neutral / unknown).
 func HealthToTopology(health string) string { return healthToTopology(health) }
 
 func healthToTopology(health string) string {
@@ -258,8 +379,12 @@ func healthToTopology(health string) string {
 		return "healthy"
 	case "Degraded", "Missing":
 		return "unhealthy"
-	case "Progressing", "Suspended":
+	case "Progressing":
 		return "degraded"
+	// Paused on purpose: the product's neutral tone, as on every other surface,
+	// so a pause doesn't read like a rollout limping along.
+	case "Suspended":
+		return "neutral"
 	default:
 		return "unknown"
 	}

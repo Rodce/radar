@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from 'react'
-import { type AppRow, buildSingleAppEntry } from '../../utils/applications'
+import { type AppRow, type AppWorkload, buildSingleAppEntry } from '../../utils/applications'
 import { ApplicationsView } from './ApplicationsView'
 
 // ApplicationsList — the OSS single-cluster Applications view. A thin wrapper
@@ -15,9 +15,11 @@ export interface ApplicationsListProps {
   headerActions?: ReactNode
   /** First fetch in flight — chassis renders its shape-stable skeleton. */
   loading?: boolean
+  /** The host's control for a workload whose rollout waits on a person. */
+  renderAwaitingAction?: (workload: AppWorkload) => ReactNode
 }
 
-export function ApplicationsList({ apps, onSelect, headerActions, loading }: ApplicationsListProps) {
+export function ApplicationsList({ apps, onSelect, headerActions, loading, renderAwaitingAction }: ApplicationsListProps) {
   // Env tokens this CLUSTER proved (identity classifications on the wire) feed
   // the namespace heuristic, so sibling-less rows in discovered env namespaces
   // still label without any hardcoded vocabulary.
@@ -31,6 +33,7 @@ export function ApplicationsList({ apps, onSelect, headerActions, loading }: App
       entries={entries}
       onSelect={onSelect}
       headerActions={headerActions}
+      renderAwaitingAction={renderAwaitingAction}
       title="Applications"
       description="Deployable software in this cluster — your services, workers, and jobs, grouped by app/release evidence."
     />

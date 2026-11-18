@@ -29,6 +29,17 @@ describe("gitopsTreeRefetchInterval", () => {
     expect(gitopsTreeRefetchInterval(tree("success", {}))).toBe(false);
   });
 
+  it("polls fast while anything in the tree is in flight, and stops once it settles", () => {
+    const node = (sync: string) => ({ id: "n", ref: { kind: "HelmRelease", namespace: "apps", name: "web" }, role: "root", tool: "fluxcd", sync, data: { reconcilingSince: new Date().toISOString() } }) as never;
+    expect(gitopsTreeRefetchInterval(tree("success", { nodes: [node("Reconciling")] } as never))).toBe(2000);
+    expect(gitopsTreeRefetchInterval(tree("success", { nodes: [node("Synced")] } as never))).toBe(false);
+  });
+
+  it("keeps the argocd-server backoff when the tree also has work in flight", () => {
+    const node = { id: "n", ref: { kind: "Application", namespace: "argocd", name: "shop" }, role: "root", tool: "argocd", data: { operationInProgress: true } } as never;
+    expect(gitopsTreeRefetchInterval(tree("success", { healthApiRetrying: true, nodes: [node] } as never))).toBe(30_000);
+  });
+
   it("keeps asking slowly after a failed fetch, so a brief outage doesn't strand the page", () => {
     expect(gitopsTreeRefetchInterval(tree("error", { healthApiRetrying: true }))).toBe(30_000);
     expect(gitopsTreeRefetchInterval(tree("error", { healthApiPending: true }))).toBe(30_000);

@@ -87,6 +87,18 @@ describe('helmInventoryRefetchInterval', () => {
     expect(helmInventoryRefetchInterval(withGap('retry'), 24)).toBe(60000)
     expect(helmInventoryRefetchInterval(withGap('wait'), 500)).toBe(60000)
   })
+
+  it('polls while a release is in flight, and stops once it settles or is stuck', () => {
+    const now = Date.parse('2026-11-18T12:00:00Z')
+    const list = (status: string, minutesAgo: number): HelmInventory => ({
+      releases: [{ name: 'web', namespace: 'apps', chart: 'web', chartVersion: '1.0.0', appVersion: '1.0', status, revision: 2, updated: new Date(now - minutesAgo * 60_000).toISOString() }],
+      observed: [],
+    })
+    expect(helmInventoryRefetchInterval(list('pending-upgrade', 1), 0, now)).toBe(5000)
+    expect(helmInventoryRefetchInterval(list('pending-upgrade', 9), 500, now)).toBe(5000)
+    expect(helmInventoryRefetchInterval(list('deployed', 1), 0, now)).toBe(false)
+    expect(helmInventoryRefetchInterval(list('pending-upgrade', 30), 0, now)).toBe(false)
+  })
 })
 
 describe('observedHelmReleaseRefetchInterval', () => {

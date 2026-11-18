@@ -1,3 +1,4 @@
+import { Hand, Loader2 } from 'lucide-react';
 import { type HealthLevel } from '../resources/resource-utils';
 import { TONE_TEXT_CLASS } from './severity-tone';
 
@@ -122,6 +123,35 @@ const DOT_SIZE: Record<NonNullable<StatusDotProps['size']>, string> = {
   sm: 'h-1.5 w-1.5',
   md: 'h-2 w-2',
 };
+
+// Spinner colors in the dot's own palette. An unknown tone spins sky, not
+// slate: gray would hide the motion that is the point.
+const SPIN_CLASS: Record<StatusTone, string> = {
+  healthy: 'text-emerald-500',
+  degraded: 'text-amber-500',
+  alert: 'text-orange-500',
+  unhealthy: 'text-rose-500',
+  neutral: 'text-sky-500',
+  unknown: 'text-sky-500',
+};
+
+// spinnerToneClass is the color a status spinner takes for a tone: one palette
+// for every surface that turns a status into motion.
+export function spinnerToneClass(tone: StatusTone): string {
+  return SPIN_CLASS[tone];
+}
+
+// StatusDotOrSpinner is a StatusDot that turns into the GitOps surfaces'
+// Loader2 spinner, in the dot's tone, while something is in motion (a rollout
+// the controller is applying, a reconcile in flight): a status that moves
+// reads as work, a still dot as a state. A third reading holds still and
+// stands out: `awaiting`, a hand in amber for work parked until a person acts
+// (a rollout waiting to be promoted). Motion wins when both are set.
+export function StatusDotOrSpinner({ moving, awaiting, label = 'In progress', ...dot }: StatusDotProps & { moving?: boolean; awaiting?: boolean; label?: string }) {
+  if (moving) return <Loader2 className={`h-3 w-3 shrink-0 animate-spin ${SPIN_CLASS[dot.tone]}`} aria-label={label} />;
+  if (awaiting) return <Hand className="h-3 w-3 shrink-0 text-amber-600 dark:text-amber-400" aria-label="Waiting for a person" />;
+  return <StatusDot {...dot} />;
+}
 
 export function StatusDot({ tone, size = 'sm', className = '' }: StatusDotProps) {
   return (

@@ -668,6 +668,276 @@
         "spec": { "replicas": 2 },
         "status": { "phase": "Progressing", "updatedReplicas": 1, "readyReplicas": 1, "availableReplicas": 1 }
       }
+    },
+    {
+      "name": "argo rollout pause step waits for promotion",
+      "kind": "Rollout",
+      "phase": "paused",
+      "active": true,
+      "manual": true,
+      "label": "Waiting for promotion",
+      "detail": "Step 2 (Pause: until promoted) · 1/4 updated · 4 available",
+      "desired": 4,
+      "updated": 1,
+      "ready": 4,
+      "available": 4,
+      "gate": "step:1@2026-11-18T10:00:00Z",
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "spec": {"replicas": 4, "strategy": {"canary": {"steps": [{"setWeight": 25}, {"pause": {}}, {"setWeight": 50}, {"pause": {"duration": "30s"}}]}}},
+        "status": {"availableReplicas": 4, "currentStepIndex": 1, "pauseConditions": [{"reason": "CanaryPauseStep", "startTime": "2026-11-18T10:00:00Z"}], "phase": "Paused", "readyReplicas": 4, "updatedReplicas": 1}
+      }
+    },
+    {
+      "name": "argo rollout timed pause step advances by itself",
+      "kind": "Rollout",
+      "phase": "paused",
+      "active": true,
+      "manual": false,
+      "label": "Rollout paused",
+      "detail": "Step 4 (Pause: 30s) · 1/4 updated · 4 available",
+      "desired": 4,
+      "updated": 1,
+      "ready": 4,
+      "available": 4,
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "spec": {"replicas": 4, "strategy": {"canary": {"steps": [{"setWeight": 25}, {"pause": {}}, {"setWeight": 50}, {"pause": {"duration": "30s"}}]}}},
+        "status": {"availableReplicas": 4, "currentStepIndex": 3, "pauseConditions": [{"reason": "CanaryPauseStep", "startTime": "2026-11-18T10:00:00Z"}], "phase": "Paused", "readyReplicas": 4, "updatedReplicas": 1}
+      }
+    },
+    {
+      "name": "argo rollout inconclusive analysis waits for a decision",
+      "kind": "Rollout",
+      "phase": "paused",
+      "active": true,
+      "manual": true,
+      "label": "Analysis inconclusive",
+      "detail": "Step 2 (Analysis: success-rate) · 1/4 updated · 4 available",
+      "desired": 4,
+      "updated": 1,
+      "ready": 4,
+      "available": 4,
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "spec": {"replicas": 4, "strategy": {"canary": {"steps": [{"setWeight": 25}, {"analysis": {"templates": [{"templateName": "success-rate"}]}}]}}},
+        "status": {"availableReplicas": 4, "currentStepIndex": 1, "pauseConditions": [{"reason": "InconclusiveAnalysisRun", "startTime": "2026-11-18T10:00:00Z"}], "phase": "Paused", "readyReplicas": 4, "updatedReplicas": 1}
+      }
+    },
+    {
+      "name": "argo rollout blue-green cut-over waits for promotion",
+      "kind": "Rollout",
+      "phase": "paused",
+      "active": true,
+      "manual": true,
+      "label": "Waiting for promotion",
+      "detail": "2/2 updated · 2 available",
+      "desired": 2,
+      "updated": 2,
+      "ready": 4,
+      "available": 2,
+      "gate": "pod:6d4f9c8b7@2026-11-18T10:00:00Z",
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "spec": {"replicas": 2, "strategy": {"blueGreen": {"activeService": "web", "autoPromotionEnabled": false}}},
+        "status": {"availableReplicas": 2, "currentPodHash": "6d4f9c8b7", "pauseConditions": [{"reason": "BlueGreenPause", "startTime": "2026-11-18T10:00:00Z"}], "phase": "Paused", "readyReplicas": 4, "updatedReplicas": 2}
+      }
+    },
+    {
+      "name": "argo rollout blue-green with auto-promotion off waits for promotion whatever autoPromotionSeconds says",
+      "kind": "Rollout",
+      "phase": "paused",
+      "active": true,
+      "manual": true,
+      "label": "Waiting for promotion",
+      "detail": "2/2 updated · 2 available",
+      "desired": 2,
+      "updated": 2,
+      "ready": 4,
+      "available": 2,
+      "gate": "pod:@2026-11-18T10:00:00Z",
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "spec": {"replicas": 2, "strategy": {"blueGreen": {"activeService": "web", "autoPromotionEnabled": false, "autoPromotionSeconds": 30}}},
+        "status": {"availableReplicas": 2, "pauseConditions": [{"reason": "BlueGreenPause", "startTime": "2026-11-18T10:00:00Z"}], "phase": "Paused", "readyReplicas": 4, "updatedReplicas": 2}
+      }
+    },
+    {
+      "name": "argo rollout blue-green cut-over promotes itself after a delay",
+      "kind": "Rollout",
+      "phase": "paused",
+      "active": true,
+      "manual": false,
+      "label": "Rollout paused",
+      "detail": "2/2 updated · 2 available",
+      "desired": 2,
+      "updated": 2,
+      "ready": 4,
+      "available": 2,
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "spec": {"replicas": 2, "strategy": {"blueGreen": {"activeService": "web", "autoPromotionSeconds": 30}}},
+        "status": {"availableReplicas": 2, "pauseConditions": [{"reason": "BlueGreenPause", "startTime": "2026-11-18T10:00:00Z"}], "phase": "Paused", "readyReplicas": 4, "updatedReplicas": 2}
+      }
+    },
+    {
+      "name": "argo rollout just promoted does not ask again",
+      "kind": "Rollout",
+      "phase": "paused",
+      "active": true,
+      "manual": false,
+      "label": "Rollout paused",
+      "detail": "Step 2 (Pause: until promoted) · 1/4 updated · 4 available",
+      "desired": 4,
+      "updated": 1,
+      "ready": 4,
+      "available": 4,
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "spec": {"replicas": 4, "strategy": {"canary": {"steps": [{"setWeight": 25}, {"pause": {}}, {"setWeight": 50}, {"pause": {"duration": "30s"}}]}}},
+        "status": {"availableReplicas": 4, "controllerPause": true, "currentStepIndex": 1, "phase": "Paused", "readyReplicas": 4, "updatedReplicas": 1}
+      }
+    },
+    {
+      "name": "argo rollout paused by a person is not a promotion gate",
+      "kind": "Rollout",
+      "phase": "paused",
+      "active": true,
+      "manual": false,
+      "label": "Rollout paused",
+      "detail": "Step 2 (Pause: until promoted) · 1/4 updated · 4 available",
+      "desired": 4,
+      "updated": 1,
+      "ready": 4,
+      "available": 4,
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "spec": {"paused": true, "replicas": 4, "strategy": {"canary": {"steps": [{"setWeight": 25}, {"pause": {}}, {"setWeight": 50}, {"pause": {"duration": "30s"}}]}}},
+        "status": {"availableReplicas": 4, "currentStepIndex": 1, "pauseConditions": [{"reason": "CanaryPauseStep", "startTime": "2026-11-18T10:00:00Z"}], "phase": "Paused", "readyReplicas": 4, "updatedReplicas": 1}
+      }
+    },
+    {
+      "name": "argo rollout pause for another reason is not a pause step",
+      "kind": "Rollout",
+      "phase": "paused",
+      "active": true,
+      "manual": false,
+      "label": "Rollout paused",
+      "detail": "Step 2 (Pause: until promoted) · 1/4 updated · 4 available",
+      "desired": 4,
+      "updated": 1,
+      "ready": 4,
+      "available": 4,
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "spec": {"replicas": 4, "strategy": {"canary": {"steps": [{"setWeight": 25}, {"pause": {}}, {"setWeight": 50}, {"pause": {"duration": "30s"}}]}}},
+        "status": {"availableReplicas": 4, "currentStepIndex": 1, "pauseConditions": [{"reason": "SomeOtherPause", "startTime": "2026-11-18T10:00:00Z"}], "phase": "Paused", "readyReplicas": 4, "updatedReplicas": 1}
+      }
+    },
+    {
+      "name": "argo rollout inconclusive experiment waits for a decision",
+      "kind": "Rollout",
+      "phase": "paused",
+      "active": true,
+      "manual": true,
+      "label": "Experiment inconclusive",
+      "detail": "Step 2 (Pause: until promoted) · 1/4 updated · 4 available",
+      "desired": 4,
+      "updated": 1,
+      "ready": 4,
+      "available": 4,
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "spec": {"replicas": 4, "strategy": {"canary": {"steps": [{"setWeight": 25}, {"pause": {}}, {"setWeight": 50}, {"pause": {"duration": "30s"}}]}}},
+        "status": {"availableReplicas": 4, "currentStepIndex": 1, "pauseConditions": [{"reason": "InconclusiveExperiment", "startTime": "2026-11-18T10:00:00Z"}], "phase": "Paused", "readyReplicas": 4, "updatedReplicas": 1}
+      }
+    },
+    {
+      "name": "argo rollout blue-green just promoted does not ask again",
+      "kind": "Rollout",
+      "phase": "paused",
+      "active": true,
+      "manual": false,
+      "label": "Rollout paused",
+      "detail": "2/2 updated · 2 available",
+      "desired": 2,
+      "updated": 2,
+      "ready": 4,
+      "available": 2,
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "spec": {"replicas": 2, "strategy": {"blueGreen": {"activeService": "web", "autoPromotionEnabled": false}}},
+        "status": {"availableReplicas": 2, "controllerPause": true, "phase": "Paused", "readyReplicas": 4, "updatedReplicas": 2}
+      }
+    },
+    {
+      "name": "argo rollout pause step with an empty duration waits for promotion",
+      "kind": "Rollout",
+      "phase": "paused",
+      "active": true,
+      "manual": true,
+      "label": "Waiting for promotion",
+      "detail": "Step 2 (Pause: until promoted) · 1/4 updated · 4 available",
+      "desired": 4,
+      "updated": 1,
+      "ready": 4,
+      "available": 4,
+      "gate": "step:1@2026-11-18T10:00:00Z",
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "spec": {"replicas": 4, "strategy": {"canary": {"steps": [{"setWeight": 25}, {"pause": {"duration": ""}}]}}},
+        "status": {"availableReplicas": 4, "currentStepIndex": 1, "pauseConditions": [{"reason": "CanaryPauseStep", "startTime": "2026-11-18T10:00:00Z"}], "phase": "Paused", "readyReplicas": 4, "updatedReplicas": 1}
+      }
+    },
+    {
+      "name": "argo rollout pause step of zero ends by itself",
+      "kind": "Rollout",
+      "phase": "paused",
+      "active": true,
+      "manual": false,
+      "label": "Rollout paused",
+      "detail": "Step 2 (Pause: 0) · 1/4 updated · 4 available",
+      "desired": 4,
+      "updated": 1,
+      "ready": 4,
+      "available": 4,
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "spec": {"replicas": 4, "strategy": {"canary": {"steps": [{"setWeight": 25}, {"pause": {"duration": 0}}]}}},
+        "status": {"availableReplicas": 4, "currentStepIndex": 1, "pauseConditions": [{"reason": "CanaryPauseStep", "startTime": "2026-11-18T10:00:00Z"}], "phase": "Paused", "readyReplicas": 4, "updatedReplicas": 1}
+      }
+    },
+    {
+      "name": "argo rollout step index out of range is no pause step",
+      "kind": "Rollout",
+      "phase": "paused",
+      "active": true,
+      "manual": false,
+      "label": "Rollout paused",
+      "detail": "Step 1 (Set weight: 25%) · 1/4 updated · 4 available",
+      "desired": 4,
+      "updated": 1,
+      "ready": 4,
+      "available": 4,
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "spec": {"replicas": 4, "strategy": {"canary": {"steps": [{"setWeight": 25}, {"pause": {}}, {"setWeight": 50}, {"pause": {"duration": "30s"}}]}}},
+        "status": {"availableReplicas": 4, "currentStepIndex": -1, "pauseConditions": [{"reason": "CanaryPauseStep", "startTime": "2026-11-18T10:00:00Z"}], "phase": "Paused", "readyReplicas": 4, "updatedReplicas": 1}
+      }
     }
   ]
 }

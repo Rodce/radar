@@ -2,6 +2,7 @@ package rollouts
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -9,6 +10,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
+
+	"github.com/skyhook-io/radar/pkg/health"
 )
 
 // Patch payloads, verbatim from kubectl-argo-rollouts.
@@ -69,7 +72,26 @@ func Promote(ctx context.Context, client dynamic.Interface, namespace, name stri
 	if err != nil {
 		return OperationResult{}, err
 	}
+	return promote(ctx, client, namespace, name, ro, "")
+}
 
+// PromoteAt is Promote for the pause a person confirmed: gate is that pause
+// (health.ArgoPromotionGate). It promotes only while the Rollout still waits
+// for promotion there, and the status patch carries the resourceVersion it
+// checked, so a Rollout that moves between the check and the write gets a
+// conflict instead of a later pause cleared or a step skipped.
+func PromoteAt(ctx context.Context, client dynamic.Interface, namespace, name, gate string) (OperationResult, error) {
+	ro, err := get(ctx, client, namespace, name)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	if current := health.WorkloadRollout(ro).Gate; current == "" || current != gate {
+		return OperationResult{}, fmt.Errorf("Rollout %s/%s: %w", namespace, name, ErrPauseChanged)
+	}
+	return promote(ctx, client, namespace, name, ro, ro.GetResourceVersion())
+}
+
+func promote(ctx context.Context, client dynamic.Interface, namespace, name string, ro *unstructured.Unstructured, resourceVersion string) (OperationResult, error) {
 	var statusPatch []byte
 	var stepIndex *int64
 	next := nextStepIndex(ro)
@@ -85,6 +107,12 @@ func Promote(ctx context.Context, client dynamic.Interface, namespace, name stri
 		// analysis or experiment the step index is what has to move.
 		stepIndex = &next
 		statusPatch = []byte(fmt.Sprintf(clearPauseConditionsPatchWithStep, next))
+	}
+	if statusPatch != nil && resourceVersion != "" {
+		var err error
+		if statusPatch, err = withResourceVersion(statusPatch, resourceVersion); err != nil {
+			return OperationResult{}, err
+		}
 	}
 
 	specPatch := unpauseSpecPatch(ro)
@@ -386,4 +414,15 @@ func Restart(ctx context.Context, client dynamic.Interface, namespace, name stri
 	}
 	return result("restart", namespace, name,
 		fmt.Sprintf("Rollout %s/%s restarting pods (restartAt %s)", namespace, name, restartAt)), nil
+}
+
+// withResourceVersion makes a merge patch conditional: the API server applies
+// it only to the object version it names and answers 409 Conflict otherwise.
+func withResourceVersion(patch []byte, resourceVersion string) ([]byte, error) {
+	var body map[string]any
+	if err := json.Unmarshal(patch, &body); err != nil {
+		return nil, fmt.Errorf("invalid Rollout patch: %w", err)
+	}
+	body["metadata"] = map[string]any{"resourceVersion": resourceVersion}
+	return json.Marshal(body)
 }

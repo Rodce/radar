@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 
@@ -61,6 +62,17 @@ func (s *Server) handleRolloutOperation(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown rollout action %q: must be abort, retry, promote, promote-full, or skip-step", action))
 		return
 	}
+	if action == "promote" {
+		gate, ok := s.readPromoteGate(w, r)
+		if !ok {
+			return
+		}
+		if gate != "" {
+			op = func(ctx context.Context, client dynamic.Interface, namespace, name string) (rollouts.OperationResult, error) {
+				return rollouts.PromoteAt(ctx, client, namespace, name, gate)
+			}
+		}
+	}
 
 	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
@@ -77,6 +89,30 @@ func (s *Server) handleRolloutOperation(w http.ResponseWriter, r *http.Request) 
 	}
 
 	s.writeJSON(w, result)
+}
+
+// promoteBodyLimit bounds the optional promote body, {"gate": "..."}.
+const promoteBodyLimit = 4096
+
+// readPromoteGate reads the pause a promote was confirmed for. The Rollout's
+// own page sends no body and promotes whatever pause it shows live; the tree
+// and the applications list confirm from older snapshots, so they name the
+// pause and the promote is refused (409) once the Rollout no longer waits
+// there (rollouts.PromoteAt).
+func (s *Server) readPromoteGate(w http.ResponseWriter, r *http.Request) (string, bool) {
+	var body struct {
+		Gate string `json:"gate"`
+	}
+	if err := decodeBoundedJSONBody(w, r, promoteBodyLimit, &body); err != nil && !errors.Is(err, io.EOF) {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			s.writeError(w, http.StatusRequestEntityTooLarge, "request body is too large")
+			return "", false
+		}
+		s.writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return "", false
+	}
+	return body.Gate, true
 }
 
 // canReadWorkloadRefSource reports whether the caller may read the object a workloadRef
@@ -235,6 +271,16 @@ func (s *Server) writeRolloutError(w http.ResponseWriter, err error, action, nam
 		errors.Is(err, rollouts.ErrTemplateUnchanged),
 		errors.Is(err, rollouts.ErrAlreadyAtLastStep):
 		status = http.StatusConflict
+	case errors.Is(err, rollouts.ErrPauseChanged):
+		status = http.StatusConflict
+	case apierrors.IsConflict(err):
+		status = http.StatusConflict
+		// Only a promote bound to a pause (PromoteAt) writes with a
+		// resourceVersion: the Rollout moved on while it was written, and
+		// nothing was changed.
+		if action == "promote" {
+			err = fmt.Errorf("Rollout %s/%s: %w", namespace, name, rollouts.ErrPauseChanged)
+		}
 	case errors.Is(err, rollouts.ErrNoSteps), errors.Is(err, rollouts.ErrWorkloadRefUnsupported):
 		status = http.StatusBadRequest
 	// The controller is a dependency that is lagging or down — the request was fine, so

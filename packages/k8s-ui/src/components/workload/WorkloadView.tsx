@@ -37,6 +37,7 @@ import {
   Stethoscope,
   Coins,
   Pause,
+  Loader2,
 } from 'lucide-react'
 import { isPausedDeployment } from '../../utils/bulk-workload-actions'
 import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom, Topology, TopologyNode, HPADiagnosis, WorkloadPodInfo, CertificateSigningRequestDetails } from '../../types'
@@ -83,7 +84,9 @@ import {
   isKueueQueuedJob,
 } from '../resources/resource-utils'
 import { ServicePortCards, type ServicePortRenderProps } from '../resources/renderers/ServiceRenderer'
-import { isRolloutActivityVisible, rolloutMayAdvanceAutomatically, type WorkloadRolloutActivity } from '../../utils/workload-rollout'
+import { isRolloutActivityVisible, rolloutIsMoving, rolloutMayAdvanceAutomatically, type WorkloadRolloutActivity } from '../../utils/workload-rollout'
+import { podReadinessDetail, startupProbeNoise, summarizeWorkloadPodReadiness, workloadPodStarting } from '../../utils/workload-pod-startup'
+import { spinnerToneClass } from '../ui/status-tone'
 import { WorkloadRolloutNotice } from './WorkloadRolloutNotice'
 import { isCoreBatchJob } from '../../utils/api-resources'
 import { formatRelativeAgeTime } from '../../utils/format'
@@ -2352,10 +2355,13 @@ function WorkloadOverviewTab({
   const apiKind = kindToPluralWithGroup(selectedResource.kind, selectedResource.group ?? '')
   const resourceKind = resource?.kind || displayKindName(apiKind, resource?.kind)
   const readiness = getReadinessSummary(resource, apiKind)
-  const podSummary = getPodSummary(workloadPods, relationships, apiKind)
+  const overviewShape = runtimeOverviewShape(apiKind)
+  const state = overviewShape === 'replicated' ? getReplicatedWorkloadState(resource, apiKind, workloadPods) : undefined
+  const rolloutMoving = rolloutIsMoving(state?.rollout)
+  const podSummary = getPodSummary(workloadPods, relationships, apiKind, rolloutMoving)
+  const isStartupNoise = startupProbeNoise(workloadPods, selectedResource.namespace, rolloutMoving)
   const scaling = getScalingSummary(resource, apiKind, relationships, scalerDiagnostics, hpaDiagnosis)
   const controlSurface = runtimeControlSurface(apiKind)
-  const overviewShape = runtimeOverviewShape(apiKind)
   const summaryMetrics = buildSummaryMetrics(resource, apiKind, resourceKind, readiness, podSummary, scaling)
   const relationshipGroups = buildRelationshipGroups(relationships)
   const servingRelationshipGroups = buildServingRelationshipGroups(relationships)
@@ -2370,8 +2376,7 @@ function WorkloadOverviewTab({
         ? 'Dependencies'
         : 'Related resources'
 
-  if (overviewShape === 'replicated') {
-    const state = getReplicatedWorkloadState(resource, apiKind, workloadPods)
+  if (state) {
     const serviceAccountName = getPodTemplateSpec(resource, apiKind)?.serviceAccountName || 'default'
     return (
       <div className="h-full overflow-auto bg-theme-base">
@@ -2459,6 +2464,7 @@ function WorkloadOverviewTab({
                 loading={eventsLoading}
                 eventsError={eventsError}
                 updatesError={updatesError}
+                isStartupNoise={isStartupNoise}
                 onSwitchToTimeline={onSwitchToTimeline}
               />
             </div>
@@ -2547,6 +2553,7 @@ function WorkloadOverviewTab({
               loading={eventsLoading}
               eventsError={eventsError}
               updatesError={updatesError}
+              isStartupNoise={isStartupNoise}
               onSwitchToTimeline={onSwitchToTimeline}
             />
           </div>
@@ -2641,15 +2648,20 @@ function WorkloadStatusStrip({
     ? {
         label: 'Pods',
         value: `${podSummary.total}`,
-        detail: podSummary.total === 0
-          ? 'none running'
-          : (podSummary.notReady ?? 0) > 0
-            ? `${podSummary.notReady} need attention`
-            : 'runtime instances',
+        detail: podSummary.total === 0 ? 'none running' : podReadinessDetail(podSummary, 'runtime instances'),
       }
     : { label: 'Pods', value: podSummary.label, detail: podSummary.detail }
   const items = [
-    { label: 'State', value: <span className={clsx('badge-sm', state.badgeClass)}>{state.label}</span>, detail: stateDetail },
+    {
+      label: 'State',
+      value: (
+        <span className={clsx('badge-sm', rolloutIsMoving(state.rollout) && 'inline-flex items-center gap-1', state.badgeClass)}>
+          {rolloutIsMoving(state.rollout) && <Loader2 className="h-3 w-3 shrink-0 animate-spin" aria-label="Rollout in progress" />}
+          {state.label}
+        </span>
+      ),
+      detail: stateDetail,
+    },
     { label: 'Ready', value: readiness.readyLabel, detail: readiness.detail },
     podItem,
     servingSummary ? { label: 'Exposure', value: servingSummary, detail: 'configured, not probed' } : null,
@@ -2934,18 +2946,17 @@ function getReadinessSummary(resource: any, apiKind: string): ReadinessSummary {
   }
 }
 
-function getPodSummary(workloadPods: WorkloadPodInfo[] | undefined, relationships: Relationships | undefined, apiKind?: string) {
+function getPodSummary(workloadPods: WorkloadPodInfo[] | undefined, relationships: Relationships | undefined, apiKind?: string, rolloutMoving = false) {
   const k = apiKind?.toLowerCase()
   if (workloadPods) {
-    const ready = workloadPods.filter((pod) => pod.ready).length
-    const total = workloadPods.length
-    const notReady = total - ready
+    const { ready, total, starting, attention } = summarizeWorkloadPodReadiness(workloadPods, rolloutMoving)
     return {
       label: `${ready}/${total}`,
-      detail: total === 0 ? (k === 'jobs' ? 'no pods retained' : 'no pods found') : notReady === 0 ? 'all ready' : `${notReady} need attention`,
+      detail: total === 0 ? (k === 'jobs' ? 'no pods retained' : 'no pods found') : podReadinessDetail({ starting, attention }, 'all ready'),
       ready,
       total,
-      notReady,
+      starting,
+      attention,
     }
   }
   const count = relationships?.pods?.length ?? 0
@@ -2954,7 +2965,8 @@ function getPodSummary(workloadPods: WorkloadPodInfo[] | undefined, relationship
     detail: count ? 'status unavailable' : k === 'jobs' ? 'no pods retained' : 'no pod refs',
     ready: undefined,
     total: count || undefined,
-    notReady: undefined,
+    starting: undefined,
+    attention: undefined,
   }
 }
 
@@ -3217,7 +3229,9 @@ function RuntimeCard({
       <div className="space-y-4">
         <div className="space-y-3">
           <div className="flex min-w-0 items-center gap-2">
-            <span className={clsx('h-2 w-2 shrink-0 rounded-full', rolloutStateDotClass(state.level))} />
+            {rolloutIsMoving(state.rollout)
+              ? <Loader2 className={clsx('h-3 w-3 shrink-0 animate-spin', spinnerToneClass(state.level))} aria-label="Rollout in progress" />
+              : <span className={clsx('h-2 w-2 shrink-0 rounded-full', rolloutStateDotClass(state.level))} />}
             <div className="min-w-0 truncate text-sm font-medium text-theme-text-primary">{headline}</div>
           </div>
 
@@ -3259,6 +3273,7 @@ function RuntimeCard({
             workloadPodsLoading={workloadPodsLoading}
             workloadPodsError={workloadPodsError}
             relationshipPods={relationshipPods}
+            rolloutMoving={rolloutIsMoving(state.rollout)}
             onNavigate={onNavigate}
           />
         </div>
@@ -3317,6 +3332,7 @@ function PodsListContent({
   workloadPodsLoading,
   workloadPodsError,
   relationshipPods,
+  rolloutMoving,
   onNavigate,
 }: {
   namespace: string
@@ -3325,6 +3341,7 @@ function PodsListContent({
   workloadPodsLoading?: boolean
   workloadPodsError?: Error | null
   relationshipPods?: ResourceRef[]
+  rolloutMoving?: boolean
   onNavigate?: NavigateToResource
 }) {
   const sortedPods = [...(workloadPods ?? [])].sort(compareWorkloadPods)
@@ -3359,6 +3376,7 @@ function PodsListContent({
                 namespace={namespace}
                 ready={pod.ready}
                 healthLevel={pod.healthLevel}
+                starting={workloadPodStarting(pod, rolloutMoving)}
                 detail={workloadPodDetail(pod)}
                 onNavigate={onNavigate}
               />
@@ -3379,6 +3397,7 @@ function PodsListContent({
                 namespace={namespace}
                 ready={pod.ready}
                 healthLevel={pod.healthLevel}
+                starting={workloadPodStarting(pod, rolloutMoving)}
                 detail={workloadPodDetail(pod)}
                 onNavigate={onNavigate}
               />
@@ -3759,12 +3778,20 @@ function RolloutProgressBar({ progress, state }: { progress: RolloutProgressSumm
           {progress.updatedLabel} · {progress.readyLabel}
         </span>
       </div>
-      <div className="h-1.5 overflow-hidden rounded-full bg-theme-elevated">
+      <div className="relative h-1.5 overflow-hidden rounded-full bg-theme-elevated">
         <div
           className={clsx('h-full rounded-full transition-[width]', rolloutProgressFillClass(state.level))}
           style={{ width: `${percent}%` }}
           aria-label={`${progress.updatedLabel}; ${progress.readyLabel}`}
         />
+        {/* While the controller is still moving replicas the bar carries the
+            sweep that marks work in flight (inflight-bar): the fill says how
+            far, the sweep says it is still going. */}
+        {rolloutIsMoving(state.rollout) && (
+          <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
+            <div className="inflight-bar h-full w-1/3 rounded-full bg-theme-surface/50" />
+          </div>
+        )}
       </div>
       {progress.unavailable > 0 && (
         <div className="mt-1.5 text-xs text-amber-600 dark:text-amber-300">
@@ -4068,6 +4095,7 @@ function ActivityCard({
   loading,
   eventsError,
   updatesError,
+  isStartupNoise,
   onSwitchToTimeline,
 }: {
   events: TimelineEvent[]
@@ -4075,9 +4103,11 @@ function ActivityCard({
   loading?: boolean
   eventsError?: Error | null
   updatesError?: Error | null
+  /** Probe failures a pod reports while it comes up (see startupProbeNoise). */
+  isStartupNoise?: (event: TimelineEvent) => boolean
   onSwitchToTimeline?: () => void
 }) {
-  const visibleEvents = mergeAndRankEvents(events, updates).slice(0, EVENT_VISIBLE_LIMIT)
+  const visibleEvents = mergeAndRankEvents(events, updates, isStartupNoise).slice(0, EVENT_VISIBLE_LIMIT)
 
   return (
     <OverviewCard
@@ -4094,22 +4124,32 @@ function ActivityCard({
         <div className="text-sm text-theme-text-tertiary">Loading activity…</div>
       ) : visibleEvents.length > 0 ? (
         <div className="space-y-2">
-          {visibleEvents.map((event, i) => (
-            <div key={`${event.id}-${i}`} className="rounded-md border border-theme-border bg-theme-base px-3 py-2">
-              <div className="flex min-w-0 items-start gap-2">
-                <span className={clsx('mt-1 h-2 w-2 shrink-0 rounded-full', isProblematicEvent(event) ? 'bg-amber-500' : 'bg-skyhook-500')} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-sm font-medium text-theme-text-primary">{event.reason || event.eventType || 'update'}</span>
-                    <span className="shrink-0 text-xs text-theme-text-tertiary">{formatRelativeAgeTime(event.timestamp)}</span>
-                  </div>
-                  <div className="mt-0.5 line-clamp-2 text-xs text-theme-text-secondary">
-                    {event.message || event.diff?.summary || `${event.kind} ${event.name}`}
+          {visibleEvents.map((event, i) => {
+            const startupNoise = isStartupNoise?.(event) ?? false
+            return (
+              <div key={`${event.id}-${i}`} className="rounded-md border border-theme-border bg-theme-base px-3 py-2">
+                <div className="flex min-w-0 items-start gap-2">
+                  <span className={clsx('mt-1 h-2 w-2 shrink-0 rounded-full', startupNoise ? 'bg-theme-text-tertiary' : isProblematicEvent(event) ? 'bg-amber-500' : 'bg-skyhook-500')} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={clsx('truncate text-sm font-medium', startupNoise ? 'text-theme-text-secondary' : 'text-theme-text-primary')}>
+                        {event.reason || event.eventType || 'update'}
+                        {startupNoise && (
+                          <span className="ml-1.5 text-xs font-normal text-theme-text-tertiary" title="The kubelet probes until the app answers; misses before that are expected">
+                            during startup
+                          </span>
+                        )}
+                      </span>
+                      <span className="shrink-0 text-xs text-theme-text-tertiary">{formatRelativeAgeTime(event.timestamp)}</span>
+                    </div>
+                    <div className={clsx('mt-0.5 line-clamp-2 text-xs', startupNoise ? 'text-theme-text-tertiary' : 'text-theme-text-secondary')}>
+                      {event.message || event.diff?.summary || `${event.kind} ${event.name}`}
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
           {(events.length + updates.length) > EVENT_VISIBLE_LIMIT && (
             <div className="text-xs text-theme-text-tertiary">Showing highest-signal recent events. Timeline has the full history.</div>
           )}
@@ -4235,8 +4275,9 @@ function dedupeStrings(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)))
 }
 
-function mergeAndRankEvents(events: TimelineEvent[], updates: TimelineEvent[]): TimelineEvent[] {
+function mergeAndRankEvents(events: TimelineEvent[], updates: TimelineEvent[], isStartupNoise?: (event: TimelineEvent) => boolean): TimelineEvent[] {
   const seen = new Set<string>()
+  const isProblem = (event: TimelineEvent) => isProblematicEvent(event) && !isStartupNoise?.(event)
   return [...events, ...updates]
     .filter((event) => {
       const key = event.id || `${event.timestamp}/${event.kind}/${event.name}/${event.reason}/${event.message}/${event.diff?.summary}`
@@ -4245,8 +4286,8 @@ function mergeAndRankEvents(events: TimelineEvent[], updates: TimelineEvent[]): 
       return true
     })
     .sort((a, b) => {
-      const aProblem = isProblematicEvent(a) ? 1 : 0
-      const bProblem = isProblematicEvent(b) ? 1 : 0
+      const aProblem = isProblem(a) ? 1 : 0
+      const bProblem = isProblem(b) ? 1 : 0
       if (aProblem !== bProblem) return bProblem - aProblem
       return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
     })

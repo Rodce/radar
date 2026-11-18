@@ -1,9 +1,9 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import type { ReactNode } from 'react'
-import { ChevronRight, Layers, Boxes, HeartPulse, Shapes, Globe, Tag } from 'lucide-react'
+import { ChevronRight, Hand, Layers, Boxes, HeartPulse, Shapes, Globe, Tag } from 'lucide-react'
 import { CollapseChevron } from '../ui/Collapse'
 import { clsx } from 'clsx'
-import { StatusDot, mapHealthToTone } from '../ui/status-tone'
+import { StatusDot, StatusDotOrSpinner, mapHealthToTone } from '../ui/status-tone'
 import { Tooltip } from '../ui/Tooltip'
 import { EmptyState } from '../ui/EmptyState'
 import { BoardTableSkeleton, BoardRailSkeleton } from '../ui/BoardSkeleton'
@@ -19,6 +19,7 @@ import { pluralize } from '../../utils/pluralize'
 import {
   type AppEntry,
   type AppRow,
+  type AppWorkload,
   type AppHealth,
   type AppWorkloadClass,
   type AppSource,
@@ -41,26 +42,37 @@ import {
   batchSignalForApp,
   batchRuntimeForApp,
   rolloutSummaryForApps,
+  rolloutSummaryAwaitsAction,
   type FoldedRow,
 } from '../../utils/applications'
 import { ReadyBar } from './ReadyBar'
 import { ProvenanceBadge, ClassBadge, CategoryChip, VersionInfo, BatchSignalChip } from './AppChips'
 import { AppIdentityTooltip, EnvHint, RolloutSummaryTooltip } from './AppTooltips'
+import { SourceActivity } from './SourceActivity'
 import { FilterRailPanel } from '../shared/FilterRailPanel'
 
-function ApplicationRuntimeCell({ apps, workloadClass, ready, desired }: { apps: AppRow[]; workloadClass: AppWorkloadClass; ready: number; desired: number }) {
+function ApplicationRuntimeCell({ apps, workloadClass, ready, desired, renderAwaitingAction }: { apps: AppRow[]; workloadClass: AppWorkloadClass; ready: number; desired: number; renderAwaitingAction?: ApplicationsViewProps['renderAwaitingAction'] }) {
   if (workloadClass !== 'job') {
     const rollout = rolloutSummaryForApps(apps)
     if (!rollout) return <ReadyBar ready={ready} desired={desired} />
+    // Nothing moves until someone acts: a hand in place of the dot, and the
+    // host's control for it when the row waits on exactly one workload (with
+    // several, which one to act on is a choice for the application's page). A
+    // stall anywhere in the row keeps its red dot, and no control.
+    const awaiting = rolloutSummaryAwaitsAction(rollout)
+    const control = awaiting && rollout.awaiting.length === 1 ? renderAwaitingAction?.(rollout.awaiting[0]) : null
     return (
       <span className="inline-flex max-w-full items-center gap-3">
         <ReadyBar ready={ready} desired={desired} />
         <Tooltip content={<RolloutSummaryTooltip summary={rollout} />} delay={150}>
-          <span className="inline-flex min-w-0 items-center gap-1.5 text-xs text-theme-text-secondary">
-            <StatusDot tone={mapHealthToTone(rollout.health)} />
+          <span className={clsx('inline-flex min-w-0 items-center gap-1.5 text-xs', awaiting ? 'font-medium text-amber-700 dark:text-amber-400' : 'text-theme-text-secondary')}>
+            {awaiting
+              ? <Hand className="h-3 w-3 shrink-0" aria-hidden />
+              : <StatusDotOrSpinner tone={mapHealthToTone(rollout.health)} moving={rollout.moving} label="Rollout in progress" />}
             <span className="truncate">{rollout.label}</span>
           </span>
         </Tooltip>
+        {control}
       </span>
     )
   }
@@ -148,6 +160,9 @@ export interface ApplicationsViewProps {
   /** First fetch in flight — render the shape-stable skeleton (pulsing tiles,
    *  rail stubs, table rows) instead of collapsing the chassis. */
   loading?: boolean
+  /** What the host can do for a workload whose rollout waits on a person (a
+   *  Promote button for an Argo Rollout), shown in its row. */
+  renderAwaitingAction?: (workload: AppWorkload) => ReactNode
 }
 
 const APPS_FILTER_SCHEMA = defineFilterSchema({
@@ -160,7 +175,7 @@ const APPS_FILTER_SCHEMA = defineFilterSchema({
   system: { param: 'system', type: 'boolean' },
 })
 
-export function ApplicationsView({ entries: allEntries, variant, onSelect, title = 'Applications', description, emptySlot, headerActions, loading }: ApplicationsViewProps) {
+export function ApplicationsView({ entries: allEntries, variant, onSelect, title = 'Applications', description, emptySlot, headerActions, loading, renderAwaitingAction }: ApplicationsViewProps) {
   // Facets + search + show-system live in the URL (shareable, bookmarkable) via
   // the shared filter-state contract. Sort stays local: it's a compound
   // {key, dir} view-preference, not a result-narrowing filter, so it isn't
@@ -549,7 +564,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                         </span>
                       </td>
                       <td className="px-2 py-2.5"><ClassBadge workloadClass={r.workloadClass} composition={r.classComposition} /></td>
-                      <td className="px-2 py-2.5"><ApplicationRuntimeCell apps={r.members.map((member) => member.row)} workloadClass={r.workloadClass} ready={r.ready} desired={r.desired} /></td>
+                      <td className="px-2 py-2.5"><ApplicationRuntimeCell apps={r.members.map((member) => member.row)} workloadClass={r.workloadClass} ready={r.ready} desired={r.desired} renderAwaitingAction={renderAwaitingAction} /></td>
                       <td className="px-2 py-2.5">
                         {r.lag ? (
                           <Tooltip content={`Promotion lag: ${r.lag} (${r.cells.filter((c) => c.version).map((c) => `${c.env}=${c.version}`).join(', ')})`} delay={150}>
@@ -582,6 +597,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                           <span className="truncate font-medium text-theme-text-primary">{e.row.name}</span>
                           {e.workloadClass !== 'job' && <BatchSignalChip signal={batchSignalForApp(e.row)} />}
                           <ProvenanceBadge tier={e.row.tier} appKey={e.row.key} confidence={e.row.confidence} />
+                          <SourceActivity source={e.row.sourceRef} status={e.row.sourceStatus} onlyWhenNotable />
                           <CategoryChip category={e.category} addonReason={e.row.addonReason} />
                         </span>
                       </td>
@@ -647,7 +663,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                         </>
                       )}
                       <td className="px-2 py-2.5"><ClassBadge workloadClass={e.workloadClass} composition={e.classComposition} /></td>
-                      <td className="px-2 py-2.5"><ApplicationRuntimeCell apps={[e.row]} workloadClass={e.workloadClass} ready={e.ready} desired={e.desired} /></td>
+                      <td className="px-2 py-2.5"><ApplicationRuntimeCell apps={[e.row]} workloadClass={e.workloadClass} ready={e.ready} desired={e.desired} renderAwaitingAction={renderAwaitingAction} /></td>
                       <td className="px-2 py-2.5">
                         {e.variant === 'fleet' ? (
                           e.versionSkew ? (

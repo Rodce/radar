@@ -1,6 +1,6 @@
 import { AlertTriangle, Check, Clock3, Loader2, Pause } from 'lucide-react'
 import { Badge, type BadgeSeverity } from '../ui/Badge'
-import type { WorkloadRolloutActivity } from '../../utils/workload-rollout'
+import { rolloutIsMoving, type WorkloadRolloutActivity } from '../../utils/workload-rollout'
 
 export function WorkloadRolloutNotice({
   activity,
@@ -42,7 +42,7 @@ export function WorkloadRolloutNotice({
   return (
     <div className={`rounded-lg border px-3 py-2.5 shadow-theme-sm ${containerTone} ${className}`} role={shown.phase === 'stalled' ? 'alert' : 'status'}>
       <div className="flex min-w-0 items-start gap-2.5">
-        <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${iconTone} ${shown.active && (shown.phase === 'applying' || shown.phase === 'progressing') ? 'animate-spin' : ''}`} />
+        <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${iconTone} ${rolloutIsMoving(shown) ? 'animate-spin' : ''}`} />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
             {recentImageSave && (

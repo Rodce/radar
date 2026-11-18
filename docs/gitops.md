@@ -98,7 +98,7 @@ The cluster-wide **Issues** view reports Application error conditions even durin
 
 **Structured remediation** — when the diagnosis pipeline recognizes a fixable failure (e.g. Argo operation error "namespace X not found"), the Issue carries a primary-blue action button that performs the fix in one click. Duplicate per-resource Missing issues + SyncError condition rows are then suppressed so the user sees one clear "create the namespace and retry" path instead of three.
 
-While an operation is running, the page polls every 2s; otherwise on-demand.
+While an operation is running, or anything in the tree has work in flight, the page polls every 2s; after five minutes of the same work, for work whose start the tree does not carry (a workload's rollout, Pods starting, a Flux spec its controller has not picked up), or for a controller's bare Progressing, every 10s; otherwise on-demand. A requested reconcile polls every 2s until the controller answers it or ten minutes pass. Nodes that wait (on a person, or between two rollout steps) are not polled: the page re-reads the tree on every batch of cluster changes, and the change that ends the wait is one.
 
 ### Per-resource health
 

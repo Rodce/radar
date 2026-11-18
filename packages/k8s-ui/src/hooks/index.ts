@@ -1,5 +1,7 @@
 export { useAnimatedUnmount } from './useAnimatedUnmount'
 export { useDebouncedValue } from './useDebouncedValue'
+export { useNow } from './useNow'
+export { useDeadlineTick } from './useDeadlineTick'
 export { useRefreshAnimation } from './useRefreshAnimation'
 export { useMediaQuery } from './useMediaQuery'
 export { usePhoneLayout, PHONE_MEDIA_QUERY } from './usePhoneLayout'

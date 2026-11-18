@@ -13,6 +13,7 @@ import { ChartBrowser } from './ChartBrowser'
 import { InstallWizard } from './InstallWizard'
 import { ObservedHelmNotice } from './ObservedHelmNotice'
 import { NotCheckedBadge } from './NotCheckedBadge'
+import { HelmReleaseStatusBadge } from './HelmReleaseStatusBadge'
 
 type ViewTab = 'releases' | 'charts'
 
@@ -701,7 +702,9 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
           <span className="min-w-0 truncate text-sm font-medium text-theme-text-primary phone:max-w-[calc(100%-1.5rem)] phone:shrink-0">{release.name}</span>
           <ReleaseHealthBadge release={release} />
           <NotCheckedBadge count={release.statusUnreadCount} />
-          {listOperation && <HelmOperationChip operation={listOperation} />}
+          {/* A stuck operation is the Status badge's to say: it names the
+              status, how long, and how to clear the lock. */}
+          {listOperation && listOperation.status !== 'stuck_pending' && <HelmOperationChip operation={listOperation} />}
           {(release.managedByFlux || release.managedByFluxHelmRelease) && <FluxBadge release={release.managedByFluxHelmRelease} />}
           {upgradeInfo?.updateAvailable && (
             <Tooltip content={`Upgrade available: ${release.chartVersion} → ${upgradeInfo.latestVersion}`}>
@@ -745,14 +748,7 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
             </span>
           </Tooltip>
         ) : (
-          <span
-            className={clsx(
-              'badge phone:whitespace-normal',
-              getStatusColor(release.status)
-            )}
-          >
-            {release.status}
-          </span>
+          <HelmReleaseStatusBadge release={release} className="phone:whitespace-normal" />
         )}
       </td>
       <td className="px-4 py-3 w-16 phone:hidden">
