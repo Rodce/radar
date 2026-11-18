@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { SubstrateFact, SubstrateHealth, SubstrateVerdict } from '../../api/substrateHealth'
@@ -5,6 +6,7 @@ import type { SubstrateFact, SubstrateHealth, SubstrateVerdict } from '../../api
 let health: { data?: SubstrateHealth; error?: Error } = {}
 let connected = true
 
+vi.mock('@skyhook-io/k8s-ui', async (original) => ({ ...await original<typeof import('@skyhook-io/k8s-ui')>(), Tooltip: ({ content, children }: { content: ReactNode; children: ReactNode }) => <span data-tooltip={typeof content === 'string' ? content : ''}>{children}</span> }))
 vi.mock('../../api/client', async (orig) => ({
   ...(await orig<typeof import('../../api/client')>()),
   usePrometheusStatus: () => ({ data: { connected } }),
@@ -73,8 +75,8 @@ describe('SubstrateVerdictLine', () => {
   it('says an hourly fact covers only the data Prometheus collected', () => {
     withVerdict({ state: 'freeActorSlots', facts: [ok('crashes', 'Crashes', 'count', 0), ok('workersWithFreeActorSlots', 'Workers with free slots', 'workers', 2, { of: 4 })] })
     const html = render(pool)
-    expect(html).toMatch(/title="Computed from the data Prometheus holds for the last hour[^"]*"[^>]*>Crashes \(1h\)/)
-    expect(html).not.toMatch(/title="[^"]*last hour[^"]*"[^>]*>Workers with free slots/)
+    expect(html).toMatch(/data-tooltip="Computed from the data Prometheus holds for the last hour[^"]*"><span>Crashes \(1h\)/)
+    expect(html).not.toMatch(/data-tooltip="[^"]*last hour[^"]*"><span>Workers with free slots/)
   })
 
   it('says Unavailable, never 0, for a fact Radar could not read, and None for one with nothing recorded', () => {
